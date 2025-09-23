@@ -1,6 +1,0 @@
-2025-09-22 16:52:27,653 - ppt_agent - INFO - PPT生成器初始化完成
-2025-09-22 16:52:27,653 - ppt_agent - INFO - 开始生成PPT: sample_content.txt
-2025-09-22 16:52:27,655 - ppt_agent - INFO - PPT生成成功: results/sample_content_20250922_165227.html
-2025-09-22 16:54:02,335 - ppt_agent - INFO - PPT生成器初始化完成
-2025-09-22 16:54:02,335 - ppt_agent - INFO - 开始生成PPT: sample_content.txt
-2025-09-22 16:54:02,336 - ppt_agent - INFO - PPT生成成功: results/sample_content_20250922_165402.html
