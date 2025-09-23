@@ -14,10 +14,23 @@ This is a PPT generation agent built on LangGraph that uses a "sliding window" s
 - **Frontend**: reveal.js for HTML presentations
 - **Data Modeling**: Pydantic for type safety and validation
 - **Templating**: Jinja2 for HTML template rendering
+- **Quality Assessment**: 多维度AI评分和反思优化机制 (Phase2新增)
 
-### Key Innovation: Sliding Window Content Generation
+### Key Innovation 1: Sliding Window Content Generation
 
 The core architectural innovation is in `src/agent/generators/content.py` - the sliding window strategy maintains a summary of the last 3 slides to ensure logical coherence when generating new content. This avoids the state explosion and content fragmentation issues of traditional concurrent approaches.
+
+### Key Innovation 2: Quality Reflection Mechanism (Phase2)
+
+Phase2引入了智能质量反思机制，实现双模式生成系统：
+- **初始生成模式**: 基于提示词和资料直接生成内容
+- **反思优化模式**: 基于AI质量评分和缺陷分析的迭代优化
+
+**核心特性**:
+- 多维度质量评分（逻辑性、相关性、语言质量、视觉布局）
+- 85分及格线，最大3次重试机制
+- 详细的缺陷分析和优化建议生成
+- 无缝集成到滑动窗口生成流程
 
 ## Development Commands
 
@@ -83,12 +96,18 @@ Each node handles errors gracefully and passes state through `OverallState` (Pyd
 
 ### Generators (`src/agent/generators/`)
 - `outline.py`: Analyzes input text and creates presentation structure
-- `content.py`: **Core module** - implements sliding window content generation
+- `content.py`: **Core module** - implements sliding window content generation with quality reflection
 - `style.py`: Intelligent style theme selection based on content analysis
 
+### Quality Assessment (`src/agent/evaluators/`) - **Phase2新增**
+- `quality.py`: Multi-dimensional quality scoring and optimization suggestions
+- `QualityEvaluator`: AI-powered quality assessment engine
+- `QualityScore`: Comprehensive scoring model with dimension breakdown
+- `OptimizationSuggestion`: Structured feedback for content improvement
+
 ### State Management (`src/agent/state.py`)
-- `OverallState`: Global workflow state with all generation data
-- `SlideContent`: Individual slide data model
+- `OverallState`: Global workflow state with quality reflection tracking
+- `SlideContent`: Individual slide data model with quality metrics
 - `SlidingSummary`: Context preservation for sliding window strategy
 - `PresentationOutline`: Structured presentation planning
 
@@ -97,7 +116,7 @@ Each node handles errors gracefully and passes state through `OverallState` (Pyd
 - `templates/`: Jinja2 templates with multiple layout options
 
 ### Workflow (`src/agent/graph.py`)
-- `PPTAgentGraph`: Main workflow orchestrator
+- `PPTAgentGraph`: Main workflow orchestrator with integrated quality checks
 - Node implementations for each pipeline stage
 - Error handling and state persistence
 
@@ -133,6 +152,12 @@ The `.env` file contains extensive configuration options:
 - Style themes and customization
 - Output and logging preferences
 - Performance and debugging options
+- **Quality reflection settings (Phase2)**:
+  - `ENABLE_QUALITY_REFLECTION=true`: Enable/disable quality reflection mechanism
+  - `QUALITY_THRESHOLD=85`: Quality score threshold (0-100)
+  - `MAX_REFLECTION_RETRY=3`: Maximum retry attempts per slide
+  - `REFLECTION_DIMENSIONS=logic,relevance,language,layout`: Assessment dimensions
+  - Dimension weights for customized scoring criteria
 
 ## Extension Points
 
@@ -164,3 +189,61 @@ The `.env` file contains extensive configuration options:
 - Parallel tool calls where safe (within single operations)
 
 This project demonstrates how to balance architectural complexity with functionality in AI content generation systems, showcasing LangGraph's capabilities for creative applications.
+
+## Phase 2 Quality Reflection System
+
+### Dual-Mode Generation Architecture
+
+The system now supports two generation modes:
+
+1. **Initial Generation Mode** (原有流程)
+   - Direct content generation based on prompts and source material
+   - Used for first-pass slide creation
+
+2. **Reflection Optimization Mode** (Phase2新增)
+   - AI-driven quality assessment with multi-dimensional scoring
+   - Iterative improvement based on specific feedback
+   - Automatic retry with optimization suggestions
+
+### Quality Assessment Framework
+
+**Scoring Dimensions**:
+- **Logic (30%)**: Content structure and reasoning coherence
+- **Relevance (25%)**: Alignment with presentation theme and objectives  
+- **Language (25%)**: Clarity, professionalism, and linguistic quality
+- **Layout (20%)**: Information hierarchy and visual organization
+
+**Quality Control**:
+- Threshold: 85/100 points for acceptance
+- Maximum retries: 3 attempts per slide
+- Detailed feedback generation for optimization
+- Fallback mechanism for edge cases
+
+### Usage Examples
+
+```bash
+# Test quality reflection with sample content
+python test_quality_reflection.py
+
+# Generate presentation with quality reflection enabled (default)
+python main.py --text "Your content" --verbose
+
+# Disable quality reflection for faster generation
+# Set ENABLE_QUALITY_REFLECTION=false in .env
+python main.py --file input.txt
+```
+
+### Performance Monitoring
+
+The system tracks quality metrics:
+- Individual slide quality scores
+- Reflection attempt counts  
+- Average quality improvements
+- Processing time impact
+
+### Integration Benefits
+
+- **Quality Assurance**: Automated content quality validation
+- **Consistency**: Maintains coherence across all slides
+- **Efficiency**: Reduces manual revision needs
+- **Scalability**: Handles varying content quality inputs

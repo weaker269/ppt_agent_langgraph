@@ -340,6 +340,109 @@ class PromptBuilder:
         template = Template(PromptTemplates.FINAL_POLISH)
         return template.substitute(complete_presentation=str(complete_presentation))
 
+    @staticmethod
+    def build_content_generation_prompt(
+        outline,
+        section,
+        key_point: str,
+        slide_id: int,
+        context_info: str
+    ) -> str:
+        """构建内容生成提示词（初始生成模式）"""
+        
+        return f"""
+你是专业的PPT内容生成专家。请为以下演示创建一页高质量的幻灯片。
+
+**演示信息:**
+- 主题: {outline.title}
+- 目标: {getattr(outline, 'objective', '信息传达和教育')}
+- 总页数: {outline.total_slides}
+
+**当前章节:** {section.title}
+**核心要点:** {key_point}
+**幻灯片序号:** {slide_id}
+
+{context_info}
+
+**内容生成要求:**
+1. **逻辑清晰**: 确保内容结构合理，论证有力
+2. **主题相关**: 紧密围绕演示主题和章节要点
+3. **语言精炼**: 使用简洁有力的表达，避免冗余
+4. **布局合理**: 控制信息密度，便于阅读理解
+
+**输出格式:**
+请严格按照以下JSON格式输出：
+
+```json
+{{
+    "title": "幻灯片标题",
+    "slide_type": "content",
+    "main_content": "主要内容描述（200-300字）",
+    "bullet_points": ["要点1", "要点2", "要点3"],
+    "speaker_notes": "演讲者注释和补充说明",
+    "design_suggestions": "视觉设计建议"
+}}
+```
+
+请确保内容专业、准确、有吸引力。
+"""
+
+    @staticmethod  
+    def build_quality_optimization_prompt(
+        original_slide,
+        feedback: str,
+        outline,
+        section,
+        key_point: str,
+        context_info: str
+    ) -> str:
+        """构建质量优化提示词（反思优化模式）"""
+        
+        return f"""
+作为PPT内容优化专家，请根据质量评估反馈优化以下幻灯片。
+
+**演示信息:**
+- 主题: {outline.title}
+- 章节: {section.title}
+- 核心要点: {key_point}
+
+**原始幻灯片:**
+- 标题: {original_slide.title}
+- 内容: {original_slide.main_content}
+- 要点: {', '.join(original_slide.bullet_points) if original_slide.bullet_points else '无'}
+
+{context_info}
+
+**质量评估反馈:**
+{feedback}
+
+**优化原则:**
+1. **重点解决**: 优先处理评分最低的维度问题
+2. **保持连贯**: 确保与上下文和整体主题的一致性
+3. **提升质量**: 在逻辑性、相关性、语言质量、布局方面全面改进
+4. **专业水准**: 达到商业演示的专业标准
+
+**具体优化方向:**
+- 如果逻辑性不足：重新组织内容结构，加强论证逻辑
+- 如果相关性不够：突出与主题的关联，删除偏离内容
+- 如果语言质量差：简化表达，提升专业性和准确性
+- 如果布局不合理：优化信息层次，控制内容密度
+
+请根据反馈全面优化内容，确保质量显著提升。
+
+**输出格式:**
+```json
+{{
+    "title": "优化后的标题",
+    "slide_type": "content", 
+    "main_content": "优化后的主要内容",
+    "bullet_points": ["优化后的要点1", "要点2", "要点3"],
+    "speaker_notes": "优化后的演讲注释",
+    "design_suggestions": "优化后的设计建议"
+}}
+```
+"""
+
 
 # 常用的系统消息
 SYSTEM_MESSAGES = {

@@ -21,383 +21,556 @@ from ..utils import logger, performance_monitor, hash_generator
 
 
 class SlidingWindowContentGenerator:
-    """滑动窗口内容生成器"""
-
-    def __init__(self, model_provider: str = "openai", model_name: str = "gpt-3.5-turbo"):
-        """
-        初始化滑动窗口内容生成器
-
-        Args:
-            model_provider: 模型提供商 ("openai" 或 "google")
-            model_name: 模型名称
-        """
+    """
+    滑动窗口内容生成器
+    
+    使用滑动窗口策略串行生成每页内容，维护上下文连贯性。
+    支持质量评估和反思优化机制。
+    """
+    
+    def __init__(self, model_provider: str = "openai"):
+        """初始化内容生成器"""
         self.model_provider = model_provider
-        self.model_name = model_name
-        self.llm = self._initialize_model()
+        self.model_name = None
+        self.llm = None
+        self._initialize_model()
+        
+        # 新增：质量评估器
+        from ..evaluators.quality import QualityEvaluator
+        self.quality_evaluator = QualityEvaluator(model_provider)
+        
+        # 配置参数
+        config = ConfigManager()
+        self.enable_reflection = config.get("ENABLE_QUALITY_REFLECTION", "true").lower() == "true"
+        
+        logger.info(f"滑动窗口内容生成器初始化完成，质量反思: {'启用' if self.enable_reflection else '禁用'}")
 
     def _initialize_model(self):
         """初始化AI模型"""
+        config = ConfigManager()
         try:
-            if self.model_provider.lower() == "openai":
-                return ChatOpenAI(
+            if self.model_provider == "openai":
+                self.model_name = config.get("OPENAI_MODEL", "gpt-3.5-turbo")
+                self.llm = ChatOpenAI(
                     model=self.model_name,
-                    temperature=0.7,
-                    max_tokens=1500
+                    temperature=float(config.get("GENERATION_TEMPERATURE", "0.7")),
+                    max_tokens=int(config.get("MAX_TOKENS", "2000")),
+                    timeout=int(config.get("MODEL_TIMEOUT", "60"))
                 )
-            elif self.model_provider.lower() == "google":
-                return ChatGoogleGenerativeAI(
+            elif self.model_provider == "google":
+                self.model_name = config.get("GOOGLE_MODEL", "gemini-pro")
+                self.llm = ChatGoogleGenerativeAI(
                     model=self.model_name,
-                    temperature=0.7,
-                    max_output_tokens=1500
+                    temperature=float(config.get("GENERATION_TEMPERATURE", "0.7")),
+                    max_tokens=int(config.get("MAX_TOKENS", "2000")),
+                    timeout=int(config.get("MODEL_TIMEOUT", "60"))
                 )
             else:
                 raise ValueError(f"不支持的模型提供商: {self.model_provider}")
-
+                
+            logger.info(f"模型初始化成功: {self.model_provider} - {self.model_name}")
         except Exception as e:
-            logger.error(f"内容生成模型初始化失败: {e}")
+            logger.error(f"模型初始化失败: {e}")
             raise
 
     def generate_all_slides(self, state: OverallState) -> OverallState:
         """
-        生成所有幻灯片内容
-
+        生成所有幻灯片内容（支持质量反思机制）
+        
         Args:
-            state: 当前状态
-
+            state: 包含演示大纲的状态
+            
         Returns:
-            更新后的状态
+            更新后的状态，包含生成的幻灯片
         """
-        if not state.outline:
-            logger.error("无法生成内容：缺少演示大纲")
-            state.errors.append("无法生成内容：缺少演示大纲")
+        if not state.outline or not state.outline.sections:
+            logger.error("生成幻灯片前需要先生成大纲")
+            state.errors.append("缺少演示大纲，无法生成幻灯片")
             return state
 
-        logger.info(f"开始生成演示内容，预计{state.outline.total_slides}页")
-        performance_monitor.start_timer("all_slides_generation")
+        logger.info(f"开始生成幻灯片，总计 {len(state.outline.sections)} 个章节")
+        
+        slides = []
+        slide_id = 1
+        
+        # 生成标题页
+        title_slide = self._generate_title_slide(state.outline, slide_id)
+        slides.append(title_slide)
+        slide_id += 1
+        
+        # 逐个章节生成内容
+        for section_idx, section in enumerate(state.outline.sections):
+            logger.info(f"生成第 {section_idx + 1} 章节: {section.title}")
+            
+            # 章节标题页
+            if section.title:
+                section_title_slide = self._generate_section_title_slide(
+                    section, slide_id, state.outline
+                )
+                slides.append(section_title_slide)
+                slide_id += 1
+            
+            # 章节内容页面
+            for point_idx, key_point in enumerate(section.key_points):
+                logger.info(f"生成内容页 {slide_id}: {key_point[:50]}...")
+                
+                # 生成幻灯片（支持质量反思）
+                content_slide = self._generate_single_slide_with_reflection(
+                    state, slides, slide_id, section, key_point
+                )
+                
+                if content_slide:
+                    slides.append(content_slide)
+                    
+                    # 创建并添加滑动摘要
+                    sliding_summary = self._create_sliding_summary(content_slide, slides)
+                    self._add_sliding_summary(state, sliding_summary)
+                    
+                slide_id += 1
+        
+        # 生成结束页
+        if len(slides) > 1:
+            conclusion_slide = self._generate_conclusion_slide(state.outline, slide_id)
+            slides.append(conclusion_slide)
+        
+        # 更新状态
+        state.slides = slides
+        state.generation_completed = True
+        
+        logger.info(f"幻灯片生成完成，共生成 {len(slides)} 页")
+        return state
 
-        try:
-            slide_id = 1
-
-            # 遍历每个章节
-            for section in state.outline.sections:
-                logger.info(f"开始生成章节: {section.title}")
-
-                # 为每个章节生成幻灯片
-                for section_slide_index in range(section.estimated_slides):
-                    try:
-                        # 生成单页内容
-                        slide = self._generate_single_slide(
-                            state, section, slide_id, section_slide_index
-                        )
-
-                        if slide:
-                            # 添加到状态中
-                            state.slides.append(slide)
-
-                            # 创建并添加滑动窗口摘要
-                            summary = self._create_sliding_summary(slide)
-                            self._add_sliding_summary(state, summary)
-
-                            logger.info(f"第{slide_id}页生成完成: {slide.title}")
-                        else:
-                            logger.warning(f"第{slide_id}页生成失败")
-
-                        slide_id += 1
-
-                        # 更新当前幻灯片索引
-                        state.current_slide_index = slide_id - 1
-
-                    except Exception as e:
-                        logger.error(f"第{slide_id}页生成出现错误: {e}")
-                        state.errors.append(f"第{slide_id}页生成失败: {str(e)}")
-                        slide_id += 1
-
-            duration = performance_monitor.end_timer("all_slides_generation")
-            logger.info(f"所有幻灯片生成完成，共{len(state.slides)}页，耗时: {duration:.2f}s")
-
-            return state
-
-        except Exception as e:
-            logger.error(f"幻灯片生成过程出现严重错误: {e}")
-            state.errors.append(f"幻灯片生成失败: {str(e)}")
-            performance_monitor.end_timer("all_slides_generation")
-            return state
-
-    def _generate_single_slide(
-        self,
-        state: OverallState,
-        section,
-        slide_id: int,
-        section_slide_index: int
+    def _generate_single_slide_with_reflection(
+        self, 
+        state: OverallState, 
+        existing_slides: List[SlideContent], 
+        slide_id: int, 
+        section: Any, 
+        key_point: str
     ) -> Optional[SlideContent]:
         """
-        生成单个幻灯片内容
-
+        生成单张幻灯片（支持质量反思机制）
+        
         Args:
             state: 当前状态
-            section: 当前章节
+            existing_slides: 已生成的幻灯片列表
             slide_id: 幻灯片ID
-            section_slide_index: 章节内幻灯片索引
-
+            section: 当前章节
+            key_point: 当前要点
+            
         Returns:
             生成的幻灯片内容
         """
-        logger.debug(f"生成第{slide_id}页内容")
-        performance_monitor.start_timer(f"slide_{slide_id}_generation")
+        # 首次生成（初始模式）
+        slide = self._generate_single_slide(state, existing_slides, slide_id, section, key_point)
+        
+        if not slide or not self.enable_reflection:
+            return slide
+            
+        # 质量评估和反思优化
+        retry_count = 0
+        max_retries = self.quality_evaluator.max_retry_count
+        
+        while retry_count < max_retries:
+            try:
+                # 质量评估
+                quality_score, suggestions = self.quality_evaluator.evaluate_slide(
+                    slide=slide,
+                    outline=state.outline,
+                    context_slides=existing_slides[-3:] if existing_slides else None
+                )
+                
+                # 记录评估结果
+                logger.info(f"幻灯片 {slide_id} 质量评分: {quality_score.total_score:.1f}")
+                
+                # 判断是否需要重新生成
+                if not self.quality_evaluator.should_regenerate(quality_score, retry_count):
+                    # 达到质量要求或超过重试次数，接受当前结果
+                    if quality_score.pass_threshold:
+                        logger.info(f"幻灯片 {slide_id} 质量达标，接受结果")
+                    else:
+                        logger.warning(f"幻灯片 {slide_id} 质量未达标但已达最大重试次数，接受当前结果")
+                        state.warnings.append(f"第{slide_id}页质量评分 {quality_score.total_score:.1f} 低于阈值")
+                    break
+                
+                # 需要重新生成
+                retry_count += 1
+                logger.info(f"开始第 {retry_count} 次质量优化重试")
+                
+                # 格式化反馈信息
+                feedback = self.quality_evaluator.format_feedback_for_regeneration(
+                    quality_score, suggestions
+                )
+                
+                # 基于反馈重新生成（优化模式）
+                optimized_slide = self._regenerate_slide_with_quality_feedback(
+                    slide=slide,
+                    feedback=feedback,
+                    state=state,
+                    existing_slides=existing_slides,
+                    section=section,
+                    key_point=key_point
+                )
+                
+                if optimized_slide:
+                    slide = optimized_slide
+                else:
+                    logger.warning(f"第 {retry_count} 次重新生成失败，保持原内容")
+                    break
+                    
+            except Exception as e:
+                logger.error(f"质量评估过程出错: {e}")
+                break
+        
+        return slide
 
+    def _generate_single_slide(
+        self, 
+        state: OverallState, 
+        existing_slides: List[SlideContent], 
+        slide_id: int, 
+        section: Any, 
+        key_point: str
+    ) -> Optional[SlideContent]:
+        """
+        生成单张幻灯片（原始方法，初始生成模式）
+        
+        Args:
+            state: 当前状态  
+            existing_slides: 已生成的幻灯片列表
+            slide_id: 幻灯片ID
+            section: 当前章节
+            key_point: 当前要点
+            
+        Returns:
+            生成的幻灯片内容
+        """
         try:
             # 获取滑动窗口上下文
-            context_history = self._get_sliding_window_context(state)
-
-            # 构建提示词
-            prompt = PromptBuilder.build_slide_content_prompt(
-                outline=state.outline.dict(),
-                section_title=section.title,
-                section_points=section.key_points,
-                current_slide=slide_id,
-                total_slides=state.outline.total_slides,
-                context_history=context_history
+            temp_state = OverallState(
+                outline=state.outline,
+                slides=existing_slides,
+                sliding_summaries=state.sliding_summaries
             )
-
-            # 调用AI模型
+            context_info = self._get_sliding_window_context(temp_state)
+            
+            # 构建生成提示词
+            prompt = PromptBuilder.build_content_generation_prompt(
+                outline=state.outline,
+                section=section,
+                key_point=key_point,
+                slide_id=slide_id,
+                context_info=context_info
+            )
+            
+            # 调用模型生成内容
             response = self._call_model_for_content(prompt)
-
+            
             # 解析响应
             slide_data = self._parse_slide_response(response, slide_id)
-
+            
             # 创建幻灯片对象
             slide = self._create_slide_object(slide_data)
-
-            # 记录生成元数据
-            metadata = GenerationMetadata(
-                model_used=f"{self.model_provider}:{self.model_name}",
-                generation_time=performance_monitor.end_timer(f"slide_{slide_id}_generation"),
-                retry_count=0
-            )
-            state.generation_metadata.append(metadata)
-
+            
+            logger.info(f"幻灯片 {slide_id} 初始生成完成")
             return slide
-
+            
         except Exception as e:
-            logger.error(f"第{slide_id}页生成失败: {e}")
-            performance_monitor.end_timer(f"slide_{slide_id}_generation")
+            logger.error(f"生成幻灯片 {slide_id} 失败: {e}")
+            return self._create_fallback_slide_data(slide_id, key_point)
+
+    def _regenerate_slide_with_quality_feedback(
+        self,
+        slide: SlideContent,
+        feedback: str,
+        state: OverallState,
+        existing_slides: List[SlideContent],
+        section: Any,
+        key_point: str
+    ) -> Optional[SlideContent]:
+        """
+        基于质量反馈重新生成幻灯片（优化模式）
+        
+        Args:
+            slide: 原始幻灯片
+            feedback: 质量反馈信息
+            state: 当前状态
+            existing_slides: 已生成的幻灯片列表
+            section: 当前章节
+            key_point: 当前要点
+            
+        Returns:
+            优化后的幻灯片内容
+        """
+        try:
+            # 获取上下文信息
+            temp_state = OverallState(
+                outline=state.outline,
+                slides=existing_slides,
+                sliding_summaries=state.sliding_summaries
+            )
+            context_info = self._get_sliding_window_context(temp_state)
+            
+            # 构建优化提示词
+            prompt = self._build_optimization_prompt(
+                original_slide=slide,
+                feedback=feedback,
+                outline=state.outline,
+                section=section,
+                key_point=key_point,
+                context_info=context_info
+            )
+            
+            # 调用模型重新生成
+            response = self._call_model_for_content(prompt)
+            
+            # 解析新内容
+            slide_data = self._parse_slide_response(response, slide.slide_id)
+            
+            # 创建优化后的幻灯片对象
+            optimized_slide = self._create_slide_object(slide_data)
+            
+            logger.info(f"幻灯片 {slide.slide_id} 质量优化完成")
+            return optimized_slide
+            
+        except Exception as e:
+            logger.error(f"质量优化重新生成失败: {e}")
             return None
+
+    def _build_optimization_prompt(
+        self,
+        original_slide: SlideContent,
+        feedback: str,
+        outline: Any,
+        section: Any,
+        key_point: str,
+        context_info: str
+    ) -> str:
+        """构建优化模式的提示词"""
+        
+        prompt = f"""
+你是专业的PPT内容优化专家。请根据质量反馈优化以下幻灯片内容。
+
+**演示大纲信息:**
+- 主题: {outline.title}
+- 目标: {outline.objective if hasattr(outline, 'objective') else '信息传达'}
+
+**当前章节:** {section.title}
+**核心要点:** {key_point}
+
+**原始幻灯片内容:**
+- 标题: {original_slide.title}
+- 类型: {original_slide.slide_type.value}
+- 主要内容: {original_slide.main_content}
+- 要点: {', '.join(original_slide.bullet_points) if original_slide.bullet_points else '无'}
+- 演讲注释: {original_slide.speaker_notes if original_slide.speaker_notes else '无'}
+
+{context_info}
+
+**质量反馈和优化要求:**
+{feedback}
+
+**优化指导原则:**
+1. 优先解决高优先级问题
+2. 保持与原始内容的连贯性
+3. 确保与演示主题和章节目标的一致性
+4. 优化语言表达的清晰度和专业性
+5. 合理控制信息密度和层次结构
+
+请根据反馈重新生成优化后的幻灯片内容，确保解决指出的质量问题。
+
+**输出格式要求:**
+请严格按照以下JSON格式输出：
+
+```json
+{{
+    "title": "优化后的幻灯片标题",
+    "slide_type": "content",
+    "main_content": "优化后的主要内容描述",
+    "bullet_points": ["要点1", "要点2", "要点3"],
+    "speaker_notes": "优化后的演讲者注释",
+    "design_suggestions": "视觉设计建议"
+}}
+```
+"""
+        return prompt
 
     def _get_sliding_window_context(self, state: OverallState) -> str:
         """
-        获取滑动窗口上下文
-
-        这是滑动窗口策略的核心实现，通过维护最近几页的摘要，
-        为当前页面生成提供上下文信息。
-
+        获取滑动窗口上下文信息
+        
         Args:
             state: 当前状态
-
+            
         Returns:
-            上下文字符串
+            上下文信息字符串
         """
+        from ..utils import ConfigManager
+        config = ConfigManager()
+        window_size = int(config.get("SLIDING_WINDOW_SIZE", "3"))
+        
         if not state.sliding_summaries:
-            return "这是演示的第一页，请设计一个引人注目的开场。"
-
-        # 获取最近的摘要（滑动窗口）
-        window_size = min(state.sliding_window_size, len(state.sliding_summaries))
+            return "**上下文信息:** 这是演示的开始部分。"
+        
+        # 获取最近的摘要
         recent_summaries = state.sliding_summaries[-window_size:]
-
-        context_parts = ["前面幻灯片的内容摘要："]
-
-        for summary in recent_summaries:
-            context_parts.append(
-                f"第{summary.slide_id}页: {summary.main_message}"
-            )
+        
+        context_lines = ["**滑动窗口上下文:**"]
+        for i, summary in enumerate(recent_summaries):
+            context_lines.append(f"第{summary.slide_id}页摘要: {summary.main_message}")
             if summary.key_concepts:
-                context_parts.append(f"  关键概念: {', '.join(summary.key_concepts)}")
-
-        context_parts.append("\n请确保当前页面与前面内容保持逻辑连贯，避免重复，并自然承接。")
-
-        return "\n".join(context_parts)
+                context_lines.append(f"  关键概念: {', '.join(summary.key_concepts)}")
+        
+        context_lines.append("\n**连贯性要求:** 新内容应与以上上下文保持逻辑连贯。")
+        
+        return "\n".join(context_lines)
 
     def _call_model_for_content(self, prompt: str) -> str:
         """调用AI模型生成内容"""
         try:
-            messages = [
-                SystemMessage(content=SYSTEM_MESSAGES["ppt_expert"]),
-                HumanMessage(content=prompt)
-            ]
-
-            response = self.llm.invoke(messages)
+            response = self.llm.invoke([HumanMessage(content=prompt)])
             return response.content
-
         except Exception as e:
-            logger.error(f"内容生成AI调用失败: {e}")
+            logger.error(f"模型调用失败: {e}")
             raise
 
-    def _parse_slide_response(self, response: str, slide_id: int) -> Dict[str, Any]:
-        """解析幻灯片响应"""
+    def _parse_slide_response(self, response: str, slide_id: int) -> Dict:
+        """解析模型响应"""
         try:
-            # 尝试提取JSON部分
+            import json
+            import re
+            
+            # 提取JSON部分
             json_match = re.search(r'```json\s*(\{.*?\})\s*```', response, re.DOTALL)
             if json_match:
                 json_str = json_match.group(1)
             else:
-                # 如果没有代码块，尝试找到JSON对象
-                json_match = re.search(r'\{.*\}', response, re.DOTALL)
-                if json_match:
-                    json_str = json_match.group(0)
-                else:
-                    raise ValueError("响应中未找到有效的JSON")
-
-            # 解析JSON
+                # 尝试直接解析
+                json_str = response.strip()
+            
             slide_data = json.loads(json_str)
-
-            # 确保必要字段存在
-            slide_data.setdefault("slide_id", slide_id)
-            slide_data.setdefault("slide_type", "content")
-            slide_data.setdefault("layout", "title_content")
-            slide_data.setdefault("title", f"幻灯片 {slide_id}")
-            slide_data.setdefault("content", [])
-            slide_data.setdefault("bullet_points", [])
-            slide_data.setdefault("images", [])
-            slide_data.setdefault("notes", "")
-            slide_data.setdefault("keywords", [])
-            slide_data.setdefault("estimated_duration", 60)
-
+            slide_data["slide_id"] = slide_id
+            
             return slide_data
-
-        except json.JSONDecodeError as e:
-            logger.error(f"幻灯片JSON解析错误: {e}")
-            return self._create_fallback_slide_data(slide_id)
-
+            
         except Exception as e:
-            logger.error(f"幻灯片解析失败: {e}")
-            return self._create_fallback_slide_data(slide_id)
+            logger.error(f"解析幻灯片响应失败: {e}")
+            logger.debug(f"原始响应: {response}")
+            
+            # 返回基本的降级数据
+            return self._create_fallback_slide_data(slide_id, "解析失败的内容")
 
-    def _create_fallback_slide_data(self, slide_id: int) -> Dict[str, Any]:
-        """创建备用幻灯片数据"""
+    def _create_fallback_slide_data(self, slide_id: int, content: str) -> Dict:
+        """创建降级幻灯片数据"""
         return {
             "slide_id": slide_id,
-            "slide_type": "content",
-            "layout": "title_content",
             "title": f"幻灯片 {slide_id}",
-            "content": ["内容生成失败，请手动编辑"],
-            "bullet_points": ["要点1", "要点2"],
-            "images": [],
-            "notes": "此页面内容生成失败，需要手动编辑",
-            "keywords": ["关键词"],
-            "estimated_duration": 60
+            "slide_type": "content",
+            "main_content": content,
+            "bullet_points": ["内容生成遇到技术问题", "请手动检查和完善此页内容"],
+            "speaker_notes": "此页面需要手动完善内容",
+            "design_suggestions": "使用简洁的布局"
         }
 
-    def _create_slide_object(self, slide_data: Dict[str, Any]) -> SlideContent:
+    def _create_slide_object(self, slide_data: Dict) -> SlideContent:
         """创建幻灯片对象"""
+        from ..state import SlideContent, SlideType
+        
+        # 确保slide_type是有效的枚举值
+        slide_type_str = slide_data.get("slide_type", "content")
         try:
-            # 验证和转换枚举类型
-            slide_type = SlideType(slide_data.get("slide_type", "content"))
-            layout = SlideLayout(slide_data.get("layout", "title_content"))
+            slide_type = SlideType(slide_type_str)
+        except ValueError:
+            slide_type = SlideType.CONTENT
+        
+        return SlideContent(
+            slide_id=slide_data["slide_id"],
+            title=slide_data.get("title", ""),
+            slide_type=slide_type,
+            main_content=slide_data.get("main_content", ""),
+            bullet_points=slide_data.get("bullet_points", []),
+            speaker_notes=slide_data.get("speaker_notes", ""),
+            design_suggestions=slide_data.get("design_suggestions", "")
+        )
 
-            slide = SlideContent(
-                slide_id=slide_data["slide_id"],
-                slide_type=slide_type,
-                layout=layout,
-                title=slide_data["title"],
-                content=slide_data.get("content", []),
-                bullet_points=slide_data.get("bullet_points", []),
-                images=slide_data.get("images", []),
-                notes=slide_data.get("notes", ""),
-                keywords=slide_data.get("keywords", []),
-                estimated_duration=slide_data.get("estimated_duration", 60)
-            )
+    def _generate_title_slide(self, outline: Any, slide_id: int) -> SlideContent:
+        """生成标题页"""
+        from ..state import SlideContent, SlideType
+        
+        return SlideContent(
+            slide_id=slide_id,
+            title=outline.title,
+            slide_type=SlideType.TITLE,
+            main_content=f"主题: {outline.title}",
+            bullet_points=[],
+            speaker_notes=f"欢迎参加关于{outline.title}的演示",
+            design_suggestions="使用大字体标题，简洁的布局"
+        )
 
-            return slide
+    def _generate_section_title_slide(self, section: Any, slide_id: int, outline: Any) -> SlideContent:
+        """生成章节标题页"""
+        from ..state import SlideContent, SlideType
+        
+        return SlideContent(
+            slide_id=slide_id,
+            title=section.title,
+            slide_type=SlideType.SECTION_TITLE,
+            main_content=f"章节: {section.title}",
+            bullet_points=[],
+            speaker_notes=f"现在我们来讨论{section.title}",
+            design_suggestions="突出章节标题，可添加章节图标"
+        )
 
-        except Exception as e:
-            logger.error(f"幻灯片对象创建失败: {e}")
-            # 创建最小可用的幻灯片对象
-            return SlideContent(
-                slide_id=slide_data["slide_id"],
-                slide_type=SlideType.CONTENT,
-                layout=SlideLayout.TITLE_CONTENT,
-                title=slide_data.get("title", f"幻灯片 {slide_data['slide_id']}"),
-                content=["内容创建失败"],
-                bullet_points=["要点1"],
-                notes="此页面创建时出现错误"
-            )
+    def _generate_conclusion_slide(self, outline: Any, slide_id: int) -> SlideContent:
+        """生成结束页"""
+        from ..state import SlideContent, SlideType
+        
+        return SlideContent(
+            slide_id=slide_id,
+            title="总结",
+            slide_type=SlideType.CONCLUSION,
+            main_content=f"关于{outline.title}的演示到此结束",
+            bullet_points=["感谢您的聆听", "期待与您的交流"],
+            speaker_notes="总结要点，感谢听众",
+            design_suggestions="简洁的感谢页面设计"
+        )
 
-    def _create_sliding_summary(self, slide: SlideContent) -> SlidingSummary:
-        """
-        创建滑动窗口摘要
-
-        这是滑动窗口策略的关键部分，为每页内容创建简洁的摘要，
-        用于后续页面生成时的上下文参考。
-
-        Args:
-            slide: 幻灯片内容
-
-        Returns:
-            滑动窗口摘要
-        """
-        # 提取主要信息
-        main_message = slide.title
-
-        # 如果有内容，添加第一句作为主要信息
-        if slide.content:
-            first_content = slide.content[0][:50]  # 截取前50字符
-            main_message += f": {first_content}"
-
-        # 提取关键概念
-        key_concepts = slide.keywords[:3]  # 最多3个关键概念
-
-        # 如果没有关键词，从要点中提取
-        if not key_concepts and slide.bullet_points:
-            key_concepts = [point[:10] for point in slide.bullet_points[:3]]
-
-        # 创建逻辑连接描述
-        logical_connection = self._determine_logical_connection(slide)
-
-        summary = SlidingSummary(
+    def _create_sliding_summary(self, slide: SlideContent, existing_slides: List[SlideContent]) -> Any:
+        """创建滑动摘要"""
+        from ..state import SlidingSummary
+        
+        # 确定逻辑连接
+        logical_connection = self._determine_logical_connection(slide, existing_slides)
+        
+        return SlidingSummary(
             slide_id=slide.slide_id,
-            main_message=main_message,
-            key_concepts=key_concepts,
+            main_message=slide.main_content[:100] + "..." if len(slide.main_content) > 100 else slide.main_content,
+            key_concepts=slide.bullet_points[:3] if slide.bullet_points else [],
             logical_connection=logical_connection
         )
 
-        logger.debug(f"为第{slide.slide_id}页创建摘要: {main_message[:30]}...")
-        return summary
-
-    def _determine_logical_connection(self, slide: SlideContent) -> str:
-        """确定逻辑连接类型"""
-        # 根据幻灯片类型和内容推断逻辑连接
-        if slide.slide_type == SlideType.TITLE:
-            return "开场介绍"
-        elif slide.slide_type == SlideType.SECTION:
-            return "章节过渡"
-        elif slide.slide_type == SlideType.SUMMARY:
-            return "总结归纳"
-        elif slide.slide_type == SlideType.COMPARISON:
-            return "对比分析"
-        elif slide.slide_type == SlideType.DATA:
-            return "数据支撑"
+    def _determine_logical_connection(self, slide: SlideContent, existing_slides: List[SlideContent]) -> str:
+        """确定逻辑连接关系"""
+        if not existing_slides:
+            return "introduction"
+        
+        # 简单的逻辑关系判断
+        if "总结" in slide.title or "结论" in slide.title:
+            return "conclusion"
+        elif "例如" in slide.main_content or "示例" in slide.main_content:
+            return "example"
+        elif "因此" in slide.main_content or "所以" in slide.main_content:
+            return "consequence"
         else:
-            return "内容展开"
+            return "continuation"
 
-    def _add_sliding_summary(self, state: OverallState, summary: SlidingSummary):
-        """
-        添加滑动窗口摘要
-
-        维护滑动窗口大小，确保不会无限增长
-
-        Args:
-            state: 当前状态
-            summary: 新的摘要
-        """
+    def _add_sliding_summary(self, state: OverallState, summary: Any):
+        """添加滑动摘要到状态"""
+        if not hasattr(state, 'sliding_summaries') or state.sliding_summaries is None:
+            state.sliding_summaries = []
         state.sliding_summaries.append(summary)
 
-        # 维护滑动窗口大小
-        if len(state.sliding_summaries) > state.sliding_window_size:
-            # 移除最旧的摘要
-            removed_summary = state.sliding_summaries.pop(0)
-            logger.debug(f"移除旧摘要: 第{removed_summary.slide_id}页")
-
-        logger.debug(f"滑动窗口摘要数量: {len(state.sliding_summaries)}")
-
+    # 保留原有的regenerate_slide_with_quality_feedback方法用于向后兼容
     def regenerate_slide_with_quality_feedback(
         self,
         state: OverallState,
@@ -406,14 +579,14 @@ class SlidingWindowContentGenerator:
         max_retries: int = 2
     ) -> Optional[SlideContent]:
         """
-        基于质量反馈重新生成幻灯片
-
+        基于质量反馈重新生成幻灯片（向后兼容方法）
+        
         Args:
             state: 当前状态
             slide_id: 要重新生成的幻灯片ID
             quality_issues: 质量问题列表
             max_retries: 最大重试次数
-
+            
         Returns:
             重新生成的幻灯片内容
         """

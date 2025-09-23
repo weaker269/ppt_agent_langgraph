@@ -43,13 +43,23 @@ class StyleTheme(str, Enum):
 class SlideContent(BaseModel):
     """单页幻灯片内容模型"""
     slide_id: int = Field(..., description="幻灯片ID")
-    slide_type: SlideType = Field(..., description="幻灯片类型")
-    layout: SlideLayout = Field(..., description="布局类型")
     title: str = Field(..., description="幻灯片标题")
-    content: List[str] = Field(default_factory=list, description="内容段落列表")
+    slide_type: SlideType = Field(default=SlideType.CONTENT, description="幻灯片类型")
+    main_content: str = Field(default="", description="主要内容")
     bullet_points: List[str] = Field(default_factory=list, description="要点列表")
+    speaker_notes: str = Field(default="", description="演讲者备注")
+    design_suggestions: str = Field(default="", description="设计建议")
+    
+    # 质量反思相关字段
+    quality_score: Optional[float] = Field(None, description="质量评分(0-100)")
+    reflection_count: int = Field(default=0, description="反思优化次数")
+    optimization_feedback: List[str] = Field(default_factory=list, description="优化反馈记录")
+    
+    # 兼容性字段
+    layout: SlideLayout = Field(default=SlideLayout.TITLE_CONTENT, description="布局类型")
+    content: List[str] = Field(default_factory=list, description="内容段落列表(兼容)")
     images: List[str] = Field(default_factory=list, description="图片描述列表")
-    notes: str = Field(default="", description="演讲者备注")
+    notes: str = Field(default="", description="演讲者备注(兼容)")
     keywords: List[str] = Field(default_factory=list, description="关键词")
     estimated_duration: int = Field(default=60, description="预计展示时长(秒)")
 
@@ -102,7 +112,7 @@ class GenerationMetadata(BaseModel):
 
 
 class OverallState(BaseModel):
-    """全局状态模型 - LangGraph的主要状态"""
+    """全局状态模型 - LangGraph的主要状态（支持质量反思机制）"""
 
     # 输入数据
     input_text: str = Field(default="", description="原始输入文本")
@@ -116,6 +126,13 @@ class OverallState(BaseModel):
     slides: List[SlideContent] = Field(default_factory=list, description="已生成的幻灯片")
     current_slide_index: int = Field(default=0, description="当前处理的幻灯片索引")
     sliding_summaries: List[SlidingSummary] = Field(default_factory=list, description="滑动窗口摘要")
+    generation_completed: bool = Field(default=False, description="生成是否完成")
+
+    # 质量反思相关
+    enable_quality_reflection: bool = Field(default=True, description="是否启用质量反思")
+    total_reflection_attempts: int = Field(default=0, description="总反思尝试次数")
+    successful_reflections: int = Field(default=0, description="成功反思次数")
+    quality_improvement_log: List[str] = Field(default_factory=list, description="质量改进日志")
 
     # 样式相关
     selected_theme: StyleTheme = Field(default=StyleTheme.PROFESSIONAL, description="选择的主题")
