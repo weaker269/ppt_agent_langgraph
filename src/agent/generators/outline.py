@@ -69,7 +69,7 @@ class OutlineGenerator:
 
         try:
             # 预处理输入文本
-            processed_text = self._preprocess_text(state.input_text)
+            processed_text = state.input_text
 
             # 构建提示词
             prompt = PromptBuilder.build_outline_prompt(processed_text)
@@ -98,22 +98,6 @@ class OutlineGenerator:
             performance_monitor.end_timer("outline_generation")
             return state
 
-    def _preprocess_text(self, text: str) -> str:
-        """预处理输入文本"""
-        logger.debug("预处理输入文本")
-
-        # 清理文本
-        cleaned_text = text_processor.clean_text(text)
-
-        # 如果文本太长，进行摘要处理
-        if len(cleaned_text) > 5000:
-            # 分段处理
-            paragraphs = text_processor.split_into_paragraphs(cleaned_text, max_length=500)
-            # 保留前1000字符作为摘要（简化处理）
-            cleaned_text = cleaned_text[:1000] + "...\n\n" + "\n".join(paragraphs[:3])
-            logger.info(f"文本过长，已进行摘要处理")
-
-        return cleaned_text
 
     def _call_model(self, prompt: str) -> str:
         """调用AI模型"""
