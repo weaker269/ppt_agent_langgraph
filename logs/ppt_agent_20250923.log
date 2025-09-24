@@ -1,1 +1,0 @@
-2025-09-23 11:19:40,101 - ppt_agent - ERROR - utils.py:78 - 模型初始化失败: The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable

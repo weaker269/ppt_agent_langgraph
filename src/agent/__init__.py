@@ -1,47 +1,28 @@
+"""PPT Agent 轻量化接口。
+
+该包提供 LangGraph 工作流封装及生成结果的数据结构。
 """
-PPT智能体主模块
 
-提供便捷的API接口用于生成PPT演示文稿。
-"""
-
-from .graph import PPTAgentGraph, create_ppt_agent, generate_ppt_from_text, generate_ppt_from_file
-from .state import OverallState, SlideContent, PresentationOutline, StyleTheme
-from .evaluators import QualityEvaluator, QualityScore, OptimizationSuggestion
-from .validators import ConsistencyChecker, ConsistencyReport, ConsistencyIssue
-from .utils import logger, ConfigManager
-
-__version__ = "1.0.0"
-__author__ = "PPT智能体团队"
+from .graph import (
+    PPTAgentGraph,
+    create_ppt_agent,
+    generate_ppt_from_file,
+    generate_ppt_from_text,
+)
+from .domain import PresentationOutline, SlideContent, SlideLayout, SlideType, StyleTheme
+from .state import OverallState
+from . import utils
 
 __all__ = [
     "PPTAgentGraph",
-    "create_ppt_agent", 
-    "generate_ppt_from_text",
-    "generate_ppt_from_file",
-    "OverallState",
-    "SlideContent",
-    "PresentationOutline",
-    "StyleTheme",
-    "QualityEvaluator",
-    "QualityScore", 
-    "OptimizationSuggestion",
-    "ConsistencyChecker",
-    "ConsistencyReport",
-    "ConsistencyIssue",
-    "logger",
-    "ConfigManager"
-] = [
-    "PPTAgentGraph",
     "create_ppt_agent",
-    "generate_ppt_from_text",
     "generate_ppt_from_file",
-    "OverallState",
-    "SlideContent",
+    "generate_ppt_from_text",
     "PresentationOutline",
+    "SlideContent",
+    "SlideLayout",
+    "SlideType",
     "StyleTheme",
-    "QualityEvaluator",
-    "QualityScore", 
-    "OptimizationSuggestion",
-    "logger",
-    "ConfigManager"
+    "OverallState",
+    "utils",
 ]
