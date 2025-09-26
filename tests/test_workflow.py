@@ -9,9 +9,11 @@ SAMPLE_TEXT = """
 """.strip()
 
 
-def test_generate_ppt_from_text_creates_slides(tmp_path, monkeypatch):
-    state = generate_ppt_from_text(SAMPLE_TEXT)
+def test_generate_ppt_from_text_creates_slides_with_stub():
+    state = generate_ppt_from_text(SAMPLE_TEXT, model_provider="stub", use_stub=True)
     assert not state.errors
     assert state.outline is not None
     assert len(state.slides) >= 5
     assert state.html_output.startswith("<!DOCTYPE html>")
+    assert state.slide_quality  # 至少有质量评估信息
+    assert state.consistency_report is not None

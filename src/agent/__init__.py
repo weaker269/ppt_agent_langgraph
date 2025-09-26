@@ -1,7 +1,4 @@
-"""PPT Agent 轻量化接口。
-
-该包提供 LangGraph 工作流封装及生成结果的数据结构。
-"""
+"""PPT Agent 高级工作流接口。"""
 
 from .graph import (
     PPTAgentGraph,
@@ -9,8 +6,20 @@ from .graph import (
     generate_ppt_from_file,
     generate_ppt_from_text,
 )
-from .domain import PresentationOutline, SlideContent, SlideLayout, SlideType, StyleTheme
+from .domain import (
+    ConsistencyReport,
+    PresentationOutline,
+    QualityFeedback,
+    QualityScore,
+    SlideContent,
+    SlideLayout,
+    SlideType,
+    StyleProfile,
+    StyleTheme,
+)
+from .evaluators import QualityEvaluator
 from .state import OverallState
+from .validators import ConsistencyChecker
 from . import utils
 
 __all__ = [
@@ -22,7 +31,13 @@ __all__ = [
     "SlideContent",
     "SlideLayout",
     "SlideType",
+    "StyleProfile",
     "StyleTheme",
+    "QualityEvaluator",
+    "QualityScore",
+    "QualityFeedback",
+    "ConsistencyChecker",
+    "ConsistencyReport",
     "OverallState",
     "utils",
 ]

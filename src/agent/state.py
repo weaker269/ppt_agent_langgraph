@@ -1,37 +1,63 @@
-"""全局状态管理模块。
-
-该文件不再复制领域模型，只负责维护工作流运行状态，确保 LangGraph
-各节点之间传递的结构在一个地方统一管理。
-"""
+"""全局状态管理模块。"""
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from .domain import PresentationOutline, SlideContent, StyleTheme
+from .domain import (
+    ConsistencyReport,
+    PresentationOutline,
+    QualityFeedback,
+    QualityScore,
+    SlideContent,
+    SlidingSummary,
+    StyleProfile,
+    StyleTheme,
+)
+
+
+class GenerationMetadata(BaseModel):
+    slide_id: int
+    model_used: str
+    generation_time: float
+    token_usage: int = 0
+    retry_count: int = 0
+    quality_after_reflection: Optional[float] = None
 
 
 class OverallState(BaseModel):
-    """LangGraph 节点之间传递的共享状态。"""
+    """LangGraph 节点间传递的共享状态。"""
 
-    # 原始输入
+    # 输入
     input_text: str = ""
     input_file_path: str = ""
 
-    # 核心成果
+    # 配置
+    model_provider: str = "openai"
+    model_name: str = "gpt-3.5-turbo"
+    enable_quality_reflection: bool = True
+    quality_threshold: float = 85.0
+    max_reflection_attempts: int = 2
+
+    # 主数据
     outline: Optional[PresentationOutline] = None
     slides: List[SlideContent] = Field(default_factory=list)
+    sliding_summaries: List[SlidingSummary] = Field(default_factory=list)
+    selected_style: StyleProfile = Field(default_factory=lambda: StyleProfile(theme=StyleTheme.PROFESSIONAL))
     html_output: str = ""
     output_file_path: str = ""
 
-    # 渲染设定
-    selected_theme: StyleTheme = StyleTheme.PROFESSIONAL
+    # 质量与一致性
+    slide_quality: Dict[int, QualityScore] = Field(default_factory=dict)
+    quality_feedback: Dict[int, List[QualityFeedback]] = Field(default_factory=dict)
+    consistency_report: Optional[ConsistencyReport] = None
 
-    # 运行告警
-    errors: List[str] = Field(default_factory=list)
+    # 运行元数据
+    generation_metadata: List[GenerationMetadata] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
+    errors: List[str] = Field(default_factory=list)
 
     def record_error(self, message: str) -> None:
         self.errors.append(message)
@@ -39,8 +65,16 @@ class OverallState(BaseModel):
     def record_warning(self, message: str) -> None:
         self.warnings.append(message)
 
+    def add_slide(self, slide: SlideContent) -> None:
+        self.slides.append(slide)
+
+    def add_summary(self, summary: SlidingSummary, window_size: int) -> None:
+        self.sliding_summaries.append(summary)
+        if len(self.sliding_summaries) > window_size:
+            self.sliding_summaries = self.sliding_summaries[-window_size:]
+
     def succeed(self) -> bool:
-        return not self.errors and bool(self.slides) and bool(self.html_output)
+        return not self.errors and self.html_output != ""
 
 
-__all__ = ["OverallState"]
+__all__ = ["OverallState", "GenerationMetadata"]
