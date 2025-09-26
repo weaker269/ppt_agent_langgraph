@@ -11,7 +11,7 @@ project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 from src.agent import generate_ppt_from_file, generate_ppt_from_text  # noqa: E402
-from src.agent.utils import logger  # noqa: E402
+from src.agent.utils import logger, load_env_settings  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -20,8 +20,8 @@ def build_parser() -> argparse.ArgumentParser:
     input_group.add_argument("--text", help="直接提供输入文本")
     input_group.add_argument("--file", help="文本文件路径")
 
-    parser.add_argument("--model-provider", default="openai", help="模型提供商，例如 openai / google / stub")
-    parser.add_argument("--model-name", default="gpt-3.5-turbo", help="具体模型名称")
+    parser.add_argument("--model-provider", help="模型提供商，例如 openai / google / stub")
+    parser.add_argument("--model-name", help="具体模型名称")
     parser.add_argument("--use-stub", action="store_true", help="使用内置 stub，跳过真实模型调用")
     parser.add_argument("--name", help="输出文件名前缀 (默认基于标题)")
     parser.add_argument("--verbose", action="store_true", help="显示调试日志")
@@ -35,9 +35,24 @@ def main() -> None:
     if args.verbose:
         logger.setLevel("DEBUG")
 
-    provider = args.model_provider
-    model_name = args.model_name
-    use_stub = args.use_stub or args.model_provider == "stub"
+    env_settings = load_env_settings()
+
+    default_provider = env_settings.get("DEFAULT_MODEL_PROVIDER", "openai")
+    provider = (args.model_provider or default_provider).lower()
+
+    if provider == "google":
+        default_model = env_settings.get("GOOGLE_MODEL", "gemini-pro")
+    elif provider == "openai":
+        default_model = env_settings.get("OPENAI_MODEL", "gpt-3.5-turbo")
+    else:
+        default_model = env_settings.get("DEFAULT_MODEL_NAME", "gpt-3.5-turbo")
+
+    model_name = args.model_name or default_model
+    env_use_stub = env_settings.get("USE_STUB", "false").lower() == "true"
+    use_stub = args.use_stub or env_use_stub or provider == "stub"
+
+    if provider == "stub" and not args.use_stub:
+        provider = default_provider
 
     if args.text:
         state = generate_ppt_from_text(args.text, provider, model_name, use_stub)

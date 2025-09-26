@@ -1,11 +1,12 @@
-"""工具集合（轻量版）。"""
+"""工具集合：文件、日志、配置等。"""
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
-from typing import Iterable, List
+from typing import Dict, Iterable, List
 
 LOGGER_NAME = "ppt_agent"
 
@@ -38,6 +39,26 @@ class ResultSaver:
 
 
 result_saver = ResultSaver()
+
+
+def load_env_settings(path: str = ".env") -> Dict[str, str]:
+    """读取 .env 配置并写入环境变量。"""
+
+    env_path = Path(path)
+    settings: Dict[str, str] = {}
+    if not env_path.exists():
+        return settings
+
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        settings[key] = value
+        os.environ.setdefault(key, value)
+    return settings
 
 
 class _TextTools:
@@ -97,4 +118,11 @@ class _TextTools:
 text_tools = _TextTools()
 
 
-__all__ = ["logger", "result_saver", "text_tools", "ensure_directory", "ResultSaver"]
+__all__ = [
+    "logger",
+    "result_saver",
+    "text_tools",
+    "ensure_directory",
+    "ResultSaver",
+    "load_env_settings",
+]

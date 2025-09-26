@@ -24,7 +24,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
-依赖最小化（pydantic、jinja2、pytest），如需真实模型请额外安装对应 SDK 并配置 API Key。
+依赖包含 `openai` 与 `google-generativeai`，可根据 `.env` 的 `DEFAULT_MODEL_PROVIDER` 切换使用的模型。首次运行会自动读取 `.env` 并写入环境变量，确保已在文件中配置 `GOOGLE_API_KEY` / `OPENAI_API_KEY` 等凭据。
 
 ## 快速体验
 ```bash
