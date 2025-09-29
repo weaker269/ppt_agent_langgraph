@@ -2,3 +2,5 @@
 /src/agent/evaluators/__pycache__/
 /src/agent/generators/__pycache__/
 /src/agent/renderers/__pycache__/
+/logs
+/results
