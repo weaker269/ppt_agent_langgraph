@@ -16,17 +16,40 @@ _OUTLINE_SYSTEM_PROMPT = """
 """
 
 _OUTLINE_USER_PROMPT_TEMPLATE = """
-请根据以下输入文本生成演示文稿大纲：
+请根据以下输入文本为演示文稿生成一个结构化的大纲。
 
+**输入文本:**
 ---
 {content}
 ---
 
-输出要求：
-1. 不超过 6 个章节，每章节给出摘要和 3-5 个要点。
-2. 估算每章节的幻灯片数量 (1-6)。
-3. 标题尽量简洁，突出核心行动或观点。
-4. JSON 字段：title, subtitle, target_audience, estimated_duration, sections。
+**指令:**
+1.  **分析文本**: 将输入文本的核心内容拆解成不超过 6 个逻辑连贯的章节。
+2.  **提取关键信息**: 为每个章节提炼出摘要（summary）和 3-5 个关键要点（key_points）。
+3.  **估算规模**: 估算每个章节大致需要多少页幻灯片（estimated_slides），范围在 1-6 之间。
+4.  **生成顶层信息**: 确定整个演示文稿的主标题（title）、副标题（subtitle）、目标受众（target_audience）和预计时长（estimated_duration，单位分钟）。
+5.  **格式化输出**: 严格按照下面定义的 JSON 格式输出。
+
+**输出 JSON 格式:**
+```json
+{{
+  "title": "string // 演示文稿的主标题，长度不超过120个字符",
+  "subtitle": "string // 副标题，可选，长度不超过160个字符",
+  "target_audience": "string // 目标受众，例如：技术开发者、市场分析师",
+  "estimated_duration": "integer // 预计的演示分钟数，例如：20",
+  "sections": [
+    {{
+      "section_id": "integer // 章节序号，从1开始",
+      "title": "string // 章节标题，长度不超过80个字符",
+      "summary": "string // 章节摘要，长度不超过300个字符",
+      "key_points": [
+        "string // 关键要点1",
+        "string // 关键要点2"
+      ],
+      "estimated_slides": "integer // 估算的幻灯片数量 (1-6)"
+    }}
+  ]
+}}
 """
 
 

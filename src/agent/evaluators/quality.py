@@ -16,20 +16,54 @@ _QUALITY_SYSTEM_PROMPT = """
 """
 
 _QUALITY_USER_PROMPT_TEMPLATE = """
-演示主题：{title}
-目标受众：{audience}
+您是一位严格的演示文稿质量审查专家。您的任务是分析给定的幻灯片内容，并进行多维度评估。
 
-当前幻灯片（第 {index} 页）：
-标题：{slide_title}
-正文：{body}
-要点：{points}
-备注：{notes}
-
-上下文摘要：
+**演示背景:**
+* **主题**: {title}
+* **目标受众**: {audience}
+* **上下文摘要 (相邻幻灯片)**:
 {context}
 
-请输出 JSON，字段包括 overall_score、logic_score、relevance_score、language_score、layout_score、strengths、weaknesses、suggestions、pass_threshold。
-通过阈值为 85 分。
+**待评估幻灯片 (第 {index} 页):**
+* **标题**: {slide_title}
+* **正文**: {body}
+* **要点**: {points}
+* **备注**: {notes}
+
+**指令:**
+1.  **多维度评分 (0-100分)**:
+    * `logic_score`: 逻辑性。内容是否连贯，论证是否有力。
+    * `relevance_score`: 相关性。内容是否紧扣演示主题和当前章节要点。
+    * `language_score`: 语言表达。语言是否专业、精炼、无错误。
+    * `layout_score`: 布局建议。内容的组织结构是否清晰，是否易于理解。
+2.  **计算总分**:
+    * `overall_score`: 综合总分，根据各维度表现给出的整体评价。
+3.  **决策与反馈**:
+    * `pass_threshold`: 判断幻灯片质量是否通过阈值 (85分)。如果 `overall_score >= 85`，则为 `true`，否则为 `false`。
+    * `strengths`: 列出该幻灯片的优点 (1-2个)。
+    * `weaknesses`: 列出主要的缺点 (1-3个)。
+    * `suggestions`: 针对缺点，提供具体、可操作的改进建议。
+4.  **格式化输出**: 严格按照下面的 JSON 格式提供您的评估结果。
+
+**输出 JSON 格式:**
+```json
+{{
+  "overall_score": "float // 综合总分 (0-100)",
+  "logic_score": "float // 逻辑性得分",
+  "relevance_score": "float // 相关性得分",
+  "language_score": "float // 语言表达得分",
+  "layout_score": "float // 布局建议得分",
+  "strengths": [
+    "string // 优点1"
+  ],
+  "weaknesses": [
+    "string // 缺点1"
+  ],
+  "suggestions": [
+    "string // 针对缺点的改进建议1"
+  ],
+  "pass_threshold": "boolean // 质量是否达标 (true/false)"
+}}
 """
 
 

@@ -18,27 +18,73 @@ _GENERATION_SYSTEM_PROMPT = """
 """
 
 _GENERATION_PROMPT_TEMPLATE = """
-演示主题：{title}
-目标受众：{audience}
-章节：{section_title}
-章节摘要：{section_summary}
-当前要点：{key_point}
-期望幻灯片编号：{slide_id}
+请为一页幻灯片生成内容。
 
-最近幻灯片摘要：
+**演示背景:**
+* **主题**: {title}
+* **目标受众**: {audience}
+* **当前章节**: {section_title} ({section_summary})
+
+**当前任务:**
+* **幻灯片编号**: {slide_id}
+* **核心要点**: {key_point}
+* **上下文 (最近几页幻灯片)**:
 {context}
 
-请生成内容精炼、逻辑清晰的一页幻灯片，确保标题突出重点，正文不超过 3 段，提供 3-5 个要点。
+**指令:**
+1.  **生成内容**: 围绕“核心要点”创作幻灯片内容，确保内容精炼、逻辑清晰。
+2.  **结构化要点**: 将核心信息组织成 3-5 个项目符号（bullet_points）。
+3.  **编写备注**: 为讲者提供一些提示或补充信息（speaker_notes）。
+4.  **定义类型与布局**: 从提供的枚举值中选择最合适的 `slide_type` 和 `layout`。
+5.  **格式化输出**: 严格按照下面定义的 JSON 格式输出。
+
+**输出 JSON 格式:**
+```json
+{{
+  "title": "string // 幻灯片标题，突出本页核心观点",
+  "body": "string // 幻灯片正文，对标题的补充说明，可选",
+  "bullet_points": [
+    "string // 要点1",
+    "string // 要点2",
+    "string // 要点3"
+  ],
+  "speaker_notes": "string // 给演讲者的备注信息",
+  "slide_type": "string // 幻灯片类型，从 [\"title\", \"intro\", \"section\", \"content\", \"comparison\", \"data\", \"summary\", \"conclusion\"] 中选择",
+  "layout": "string // 幻灯片布局，从 [\"title\", \"standard\", \"two_column\", \"image_text\", \"bullet\", \"data_table\"] 中选择"
+}}
 """
 
 _REFLECTION_PROMPT_TEMPLATE = """
-请根据以下质量反馈改进幻灯片：
-原始标题：{title}
-原始正文：{body}
-原始要点：{points}
-反馈：{feedback}
+您需要根据提供的质量反馈来优化一页幻灯片。
 
-保留主题与要点核心含义，针对问题逐条优化，并重新生成完整 JSON。
+**原始幻灯片内容:**
+* **标题**: {title}
+* **正文**: {body}
+* **要点**: {points}
+
+**质量反馈:**
+---
+{feedback}
+---
+
+**指令:**
+1.  **分析反馈**: 理解每一条反馈的改进要求。
+2.  **优化内容**: 在保留核心信息的前提下，修改幻灯片的内容以解决反馈中指出的问题。
+3.  **重新生成**: 严格按照指定的 JSON 格式，重新生成完整的幻灯片内容。
+
+**输出 JSON 格式:**
+```json
+{{
+  "title": "string // 优化后的幻灯片标题",
+  "body": "string // 优化后的正文内容",
+  "bullet_points": [
+    "string // 优化后的要点1",
+    "string // 优化后的要点2"
+  ],
+  "speaker_notes": "string // 优化后的讲者备注",
+  "slide_type": "string // 幻灯片类型 (从 [\"title\", \"intro\", \"section\", \"content\", ...])",
+  "layout": "string // 幻灯片布局 (从 [\"title\", \"standard\", \"two_column\", ...])"
+}}
 """
 
 
