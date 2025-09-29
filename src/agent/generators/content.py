@@ -380,7 +380,6 @@ class SlidingWindowContentGenerator:
         )
 
     @staticmethod
-    @staticmethod
     def _preview_text(text: str | None, max_len: int = 120) -> str:
         if not text:
             return "（空）"
@@ -389,6 +388,7 @@ class SlidingWindowContentGenerator:
             return f"{compact[:max_len]}…"
         return compact
 
+    @staticmethod
     def _format_context(slides: Iterable[SlideContent]) -> str:
         if not slides:
             return "无"
