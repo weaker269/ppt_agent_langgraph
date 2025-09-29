@@ -7,7 +7,7 @@ from typing import Dict
 
 from jinja2 import Environment, FileSystemLoader
 
-from ..domain import SlideContent, StyleProfile
+from ..domain import SlideContent, StyleProfile, StyleTheme
 from ..state import OverallState
 from ..utils import ensure_directory, logger
 
@@ -86,11 +86,11 @@ class HTMLRenderer:
             state.record_error("缺少幻灯片内容，无法渲染 HTML")
             return state
 
-        style_profile = state.selected_style or StyleProfile(theme=state.selected_style.theme)
-        palette = self._build_palette(style_profile)
+        base_profile = state.selected_style or StyleProfile(theme=StyleTheme.PROFESSIONAL)
+        palette = self._build_palette(base_profile)
         fonts = {
-            "title": style_profile.font_pairing.get("title", "Roboto"),
-            "body": style_profile.font_pairing.get("body", "Source Sans"),
+            "title": base_profile.font_pairing.get("title", "Roboto"),
+            "body": base_profile.font_pairing.get("body", "Source Sans"),
         }
         quality_summary = self._summarise_quality(state)
         consistency = self._summarise_consistency(state)
@@ -102,7 +102,7 @@ class HTMLRenderer:
             slides=[slide.as_dict() for slide in state.slides],
             palette=palette,
             fonts=fonts,
-            style=style_profile,
+            style=base_profile,
             quality_summary=quality_summary,
             consistency=consistency,
         )

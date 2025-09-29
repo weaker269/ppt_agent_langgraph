@@ -10,13 +10,15 @@ import logging
 import os
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Type, TypeVar
+from typing import Any, Dict, List, Optional, Type, TypeVar
 
 from pydantic import BaseModel
 
 from .domain import StyleTheme
 from .models import (
+    ColorSwatch,
     ConsistencyAnalysisResponse,
+    FontPairing,
     OutlineResponse,
     QualityAssessmentResponse,
     SlideResponse,
@@ -207,15 +209,78 @@ class AIModelClient:
     def _normalize_style_payload(data: Dict[str, Any]) -> Dict[str, Any]:
         theme_value = str(data.get("recommended_theme", ""))
         matched = AIModelClient._match_theme(theme_value)
-        data["recommended_theme"] = matched.value
-        palette = data.get("color_palette") or []
-        if isinstance(palette, str):
-            palette = [item.strip() for item in palette.split(",") if item.strip()]
+        data["recommended_theme"] = matched
+
+        palette_raw = data.get("color_palette") or []
+
+        def _normalize_swatch(item: Any, index: int) -> Dict[str, Any]:
+            if isinstance(item, ColorSwatch):
+                return item.model_dump()
+            if isinstance(item, dict):
+                name = (item.get("name") or item.get("label") or item.get("role") or f"Color {index}").strip()
+                hex_value = (item.get("hex") or item.get("value") or item.get("color") or "").strip()
+                usage = (item.get("usage") or item.get("role") or None)
+                return {"name": name, "hex": hex_value, "usage": usage}
+            if isinstance(item, str):
+                match = re.search(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})", item)
+                hex_value = match.group(0) if match else ""
+                name = item if not match else item.replace(match.group(0), "").replace("-", " ").strip()
+                return {"name": name or f"Color {index}", "hex": hex_value, "usage": None}
+            return {"name": f"Color {index}", "hex": "", "usage": None}
+
+        if isinstance(palette_raw, dict):
+            palette_iterable = [
+                {"name": key, "hex": value} if not isinstance(value, dict) else {"name": key, **value}
+                for key, value in palette_raw.items()
+            ]
+        else:
+            palette_iterable = list(palette_raw) if isinstance(palette_raw, (list, tuple)) else [palette_raw]
+
+        palette: List[Dict[str, Any]] = []
+        for idx, item in enumerate(palette_iterable, 1):
+            swatch = _normalize_swatch(item, idx)
+            if swatch.get("hex"):
+                palette.append(swatch)
         data["color_palette"] = palette
-        fonts = data.get("font_pairing") or []
-        if isinstance(fonts, str):
-            fonts = [item.strip() for item in fonts.split(",") if item.strip()]
+
+        font_raw = data.get("font_pairing") or []
+
+        def _normalize_font(item: Any, index: int) -> Dict[str, Any]:
+            if isinstance(item, FontPairing):
+                return item.model_dump()
+            if isinstance(item, dict):
+                role = (item.get("role") or item.get("name") or item.get("usage") or f"Font {index}").strip()
+                font_name = (item.get("font_name") or item.get("font") or item.get("value") or "").strip()
+                fallback = (item.get("fallback") or item.get("fallback_font") or None)
+                return {"role": role, "font_name": font_name, "fallback": fallback}
+            if isinstance(item, str):
+                parts = [part.strip() for part in re.split(r"[:|-]", item, maxsplit=1) if part.strip()]
+                if len(parts) == 2:
+                    role, font_name = parts
+                else:
+                    role, font_name = ("title" if index == 1 else "body"), parts[0]
+                return {"role": role, "font_name": font_name, "fallback": None}
+            return {"role": f"Font {index}", "font_name": "", "fallback": None}
+
+        if isinstance(font_raw, dict):
+            font_iterable = [
+                {"role": key, "font_name": value} if not isinstance(value, dict) else {"role": key, **value}
+                for key, value in font_raw.items()
+            ]
+        else:
+            font_iterable = list(font_raw) if isinstance(font_raw, (list, tuple)) else [font_raw]
+
+        fonts: List[Dict[str, Any]] = []
+        for idx, item in enumerate(font_iterable, 1):
+            font_info = _normalize_font(item, idx)
+            if font_info.get("font_name"):
+                fonts.append(font_info)
         data["font_pairing"] = fonts
+
+        reasoning = data.get("reasoning")
+        if isinstance(reasoning, str):
+            data["reasoning"] = reasoning.strip()[:300]
+
         return data
 
     @staticmethod
@@ -310,10 +375,18 @@ class AIModelClient:
     def _stub_style(self, prompt: str) -> StyleAnalysisResponse:
         return StyleAnalysisResponse(
             recommended_theme=StyleTheme.PROFESSIONAL,
-            color_palette=["#1f2937", "#f9fafb", "#2563eb"],
-            font_pairing=["Roboto", "Noto Sans"],
+            color_palette=[
+                ColorSwatch(name="Primary", hex="#1F2937", usage="primary"),
+                ColorSwatch(name="Background", hex="#F9FAFB", usage="background"),
+                ColorSwatch(name="Accent", hex="#2563EB", usage="accent"),
+                ColorSwatch(name="Muted Text", hex="#6B7280", usage="text_muted"),
+            ],
+            font_pairing=[
+                FontPairing(role="Headings", font_name="Roboto"),
+                FontPairing(role="Body Text", font_name="Noto Sans"),
+            ],
             layout_preference="balanced",
-            reasoning="根据输入文本无法识别特定语境，使用默认专业主题。",
+            reasoning="根据输入文本无法识别特定语境，默认提供专业主题配色与字体组合。",
         )
 
     def _stub_quality(self, prompt: str) -> QualityAssessmentResponse:

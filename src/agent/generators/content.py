@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Iterable, List, Tuple
+from typing import Dict, Iterable, List, Tuple
 
 from ..ai_client import AIConfig, AIModelClient
 from ..domain import PresentationOutline, SlideContent, SlideLayout, SlideType, SlidingSummary
@@ -102,17 +102,42 @@ class SlidingWindowContentGenerator:
             state.record_error("缺少有效大纲，无法生成幻灯片")
             return state
 
+        total_sections = len(outline.sections)
+        total_key_points = sum(len(section.key_points) for section in outline.sections)
+        logger.info(
+            "开始生成演示文稿：标题《%s》，章节数=%s，关键要点总数=%s，质量反思=%s，窗口大小=%s",
+            outline.title,
+            total_sections,
+            total_key_points,
+            "开启" if state.enable_quality_reflection else "关闭",
+            self.window_size,
+        )
+
         start_time = time.time()
         state.slides = []
         self._create_intro_slide(state, outline)
 
-        for section in outline.sections:
+        for idx, section in enumerate(outline.sections, start=1):
+            logger.info(
+                "进入章节 %s/%s：《%s》，关键要点=%s",
+                idx,
+                total_sections,
+                section.title,
+                len(section.key_points),
+            )
             self._create_section_slide(state, section)
-            for key_point in section.key_points:
+            for point_idx, key_point in enumerate(section.key_points, start=1):
+                logger.info(
+                    "章节《%s》要点 %s/%s：%s",
+                    section.title,
+                    point_idx,
+                    len(section.key_points),
+                    key_point,
+                )
                 self._create_content_slide(state, outline, section, key_point)
 
         self._create_summary_slide(state, outline)
-        logger.info("内容生成完成，共 %s 页，耗时 %.2fs", len(state.slides), time.time() - start_time)
+        logger.info("全部幻灯片生成完成：共 %s 页，用时 %.2fs", len(state.slides), time.time() - start_time)
         return state
 
     # ------------------------------------------------------------------
@@ -131,6 +156,7 @@ class SlidingWindowContentGenerator:
         )
         state.add_slide(slide)
         state.add_summary(self._build_summary(slide), self.window_size)
+        logger.info("已生成封面页：slide_id=%s，标题《%s》", slide.slide_id, slide.title)
 
     def _create_section_slide(self, state: OverallState, section) -> None:
         slide_id = len(state.slides) + 1
@@ -145,10 +171,24 @@ class SlidingWindowContentGenerator:
         )
         state.add_slide(slide)
         state.add_summary(self._build_summary(slide), self.window_size)
+        logger.info("已生成章节引导页：slide_id=%s，章节《%s》", slide.slide_id, slide.title)
 
     def _create_content_slide(self, state: OverallState, outline: PresentationOutline, section, key_point: str) -> None:
         slide_id = len(state.slides) + 1
         context_slides = state.slides[-self.window_size :]
+        context_text = self._format_context(context_slides)
+        logger.info(
+            '开始生成内容页：slide_id=%s，章节《%s》，要点="%s"，上下文页数=%s',
+            slide_id,
+            section.title,
+            key_point,
+            len(context_slides),
+        )
+        if context_slides:
+            window_preview = "; ".join(
+                f"#{ctx_slide.slide_id}:{self._preview_text(ctx_slide.title, 24)}" for ctx_slide in context_slides
+            )
+            logger.debug("上下文窗口：%s", window_preview)
         prompt = _GENERATION_PROMPT_TEMPLATE.format(
             title=outline.title,
             audience=outline.target_audience,
@@ -156,11 +196,53 @@ class SlidingWindowContentGenerator:
             section_summary=section.summary,
             key_point=key_point,
             slide_id=slide_id,
-            context=self._format_context(context_slides),
+            context=context_text,
         )
+        logger.info(
+            "模型提示摘要（slide_id=%s）：%s",
+            slide_id,
+            self._preview_text(prompt, 180),
+        )
+        logger.debug("模型完整提示（slide_id=%s）：%s", slide_id, prompt)
         slide, attempts = self._generate_with_reflection(state, prompt, slide_id, key_point, context_slides)
         state.add_slide(slide)
         state.add_summary(self._build_summary(slide), self.window_size)
+        logger.info(
+            "内容页生成完成：slide_id=%s，标题《%s》，耗时=%.2fs，反思次数=%s",
+            slide.slide_id,
+            slide.title,
+            attempts["duration"],
+            attempts["retry"],
+        )
+        logger.info(
+            "模型输出摘要（slide_id=%s）：正文=%s；要点=%s；讲稿=%s",
+            slide.slide_id,
+            self._preview_text(slide.body, 120),
+            "；".join(slide.bullet_points) if slide.bullet_points else "（无要点）",
+            self._preview_text(slide.speaker_notes, 80),
+        )
+        score = state.slide_quality.get(slide.slide_id)
+        if score:
+            passed = score.pass_threshold and score.total_score >= state.quality_threshold
+            dimension_summary = ", ".join(
+                f"{dimension.value}:{value:.1f}" for dimension, value in score.dimension_scores.items()
+            )
+            logger.info(
+                "质量评估：slide_id=%s，总分=%.1f/%.1f，模型判定=%s，自定义判定=%s",
+                slide.slide_id,
+                score.total_score,
+                state.quality_threshold,
+                "通过" if score.pass_threshold else "未通过",
+                "通过" if passed else "未通过",
+            )
+            if dimension_summary:
+                logger.debug("质量维度得分（slide_id=%s）：%s", slide.slide_id, dimension_summary)
+        feedback_items = state.quality_feedback.get(slide.slide_id) or []
+        if feedback_items:
+            suggestion_preview = "；".join(
+                self._preview_text(f"{item.dimension.value}:{item.suggestion}", 60) for item in feedback_items
+            )
+            logger.info("质量改进建议（slide_id=%s）：%s", slide.slide_id, suggestion_preview)
         state.generation_metadata.append(
             GenerationMetadata(
                 slide_id=slide.slide_id,
@@ -171,6 +253,9 @@ class SlidingWindowContentGenerator:
                 quality_after_reflection=slide.quality_score,
             )
         )
+        metadata = state.generation_metadata[-1]
+        logger.debug("生成元数据记录：%s", metadata.model_dump())
+        logger.debug("滑动摘要缓存页数：%s", len(state.sliding_summaries))
 
     def _create_summary_slide(self, state: OverallState, outline: PresentationOutline) -> None:
         slide_id = len(state.slides) + 1
@@ -185,6 +270,7 @@ class SlidingWindowContentGenerator:
             layout=SlideLayout.STANDARD,
         )
         state.add_slide(slide)
+        logger.info("已生成总结页：slide_id=%s，要点数量=%s", slide.slide_id, len(slide.bullet_points))
 
     # ------------------------------------------------------------------
     # 反思优化
@@ -200,33 +286,54 @@ class SlidingWindowContentGenerator:
     ) -> Tuple[SlideContent, Dict[str, float]]:
         retries = 0
         start = time.time()
+        logger.info('调用模型生成初稿：slide_id=%s，要点="%s"', slide_id, key_point)
         slide = self._invoke_model(prompt, slide_id)
+        logger.info("模型初稿完成：slide_id=%s，标题《%s》", slide.slide_id, slide.title)
+        logger.debug("初稿输出结构：%s", slide.model_dump())
 
         while state.enable_quality_reflection and retries < state.max_reflection_attempts:
             score, feedback = self.quality_evaluator.evaluate(state, slide, context_slides=context_slides)
             state.slide_quality[slide.slide_id] = score
-            if score.pass_threshold and score.total_score >= state.quality_threshold:
+            passed = score.pass_threshold and score.total_score >= state.quality_threshold
+            logger.info(
+                "质量评估结果：slide_id=%s，总分=%.1f/%.1f，模型判定=%s，自定义判定=%s，建议数=%s",
+                slide.slide_id,
+                score.total_score,
+                state.quality_threshold,
+                "通过" if score.pass_threshold else "未通过",
+                "通过" if passed else "未通过",
+                len(feedback),
+            )
+            if passed:
                 slide.quality_score = score.total_score
                 break
             retries += 1
             state.quality_feedback[slide.slide_id] = feedback
             logger.info(
-                "幻灯片 %s 得分 %.1f，低于 %.1f，触发第 %s 次重试",
+                "质量未达标，准备触发反思重写：slide_id=%s，第%s次重写",
                 slide.slide_id,
-                score.total_score,
-                state.quality_threshold,
                 retries,
             )
             slide = self._regenerate(slide, feedback)
+            logger.info(
+                "反思重写完成：slide_id=%s，当前反思次数=%s，标题《%s》",
+                slide.slide_id,
+                slide.reflection_count,
+                slide.title,
+            )
         else:
             if slide.slide_id not in state.slide_quality:
                 score, feedback = self.quality_evaluator.evaluate(state, slide, context_slides=context_slides)
                 state.slide_quality[slide.slide_id] = score
                 state.quality_feedback[slide.slide_id] = feedback
                 slide.quality_score = score.total_score
-
+        logger.info(
+            "最终采用内容页：slide_id=%s，反思次数=%s，总耗时=%.2fs",
+            slide.slide_id,
+            retries,
+            time.time() - start,
+        )
         return slide, {"retry": retries, "duration": time.time() - start}
-
     def _invoke_model(self, prompt: str, slide_id: int) -> SlideContent:
         response = self.client.structured_completion(prompt, SlideResponse, system=_GENERATION_SYSTEM_PROMPT)
         return self._convert_slide(response, slide_id)
@@ -239,11 +346,16 @@ class SlidingWindowContentGenerator:
             points="; ".join(slide.bullet_points),
             feedback=feedback_text,
         )
+        logger.info(
+            "根据质量反馈重写：slide_id=%s，反馈摘要=%s",
+            slide.slide_id,
+            self._preview_text(feedback_text, 160),
+        )
+        logger.debug("反思提示（slide_id=%s）：%s", slide.slide_id, prompt)
         response = self.client.structured_completion(prompt, SlideResponse, system=_GENERATION_SYSTEM_PROMPT)
         regenerated = self._convert_slide(response, slide.slide_id)
         regenerated.reflection_count = slide.reflection_count + 1
         return regenerated
-
     @staticmethod
     def _convert_slide(response: SlideResponse, slide_id: int) -> SlideContent:
         slide_type = SlideType(response.slide_type) if response.slide_type in SlideType._value2member_map_ else SlideType.CONTENT
@@ -268,6 +380,15 @@ class SlidingWindowContentGenerator:
         )
 
     @staticmethod
+    @staticmethod
+    def _preview_text(text: str | None, max_len: int = 120) -> str:
+        if not text:
+            return "（空）"
+        compact = " ".join(text.split())
+        if len(compact) > max_len:
+            return f"{compact[:max_len]}…"
+        return compact
+
     def _format_context(slides: Iterable[SlideContent]) -> str:
         if not slides:
             return "无"

@@ -4,13 +4,26 @@ from __future__ import annotations
 
 from ..ai_client import AIConfig, AIModelClient
 from ..domain import StyleProfile, StyleTheme
-from ..models import StyleAnalysisResponse
+from ..models import ColorSwatch, FontPairing, StyleAnalysisResponse
 from ..state import OverallState
 from ..utils import logger
 
 _STYLE_SYSTEM_PROMPT = """
 你是一位视觉设计顾问，需要根据演示文稿的主题与章节内容推荐最合适的样式主题。
-输出 JSON，包含 recommended_theme, color_palette(数组), font_pairing(数组), layout_preference, reasoning。
+请严格输出 JSON，字段要求如下：
+{
+  "recommended_theme": "professional|modern|creative|academic|minimal",
+  "color_palette": [
+    {"name": "颜色用途", "hex": "#RRGGBB", "usage": "primary|background|accent|text|text_muted|border|on_primary"}
+  ],
+  "font_pairing": [
+    {"role": "Headings", "font_name": "标题字体"},
+    {"role": "Body Text", "font_name": "正文字体"}
+  ],
+  "layout_preference": "balanced|wide|dynamic|structured|compact",
+  "reasoning": "不超过280字的中文说明，概述推荐理由"
+}
+至少提供3个配色（建议覆盖背景、正文文本、强调），字体至少包含标题与正文字体，可选提供 usage/role 解释。
 """
 
 _STYLE_PROMPT_TEMPLATE = """
@@ -18,7 +31,7 @@ _STYLE_PROMPT_TEMPLATE = """
 目标受众：{audience}
 章节：
 {sections}
-请分析内容类型（商业、技术、创意、学术等），并选择能够强化信息传达的视觉风格。
+请分析内容类型（商业、技术、创意、学术等），并严格按照字段要求输出 JSON。
 """
 
 _DEFAULT_PALETTES = {
@@ -88,22 +101,88 @@ class StyleSelector:
         return state
 
     def _build_profile(self, response: StyleAnalysisResponse) -> StyleProfile:
-        palette_map = {
-            "primary": response.color_palette[0] if response.color_palette else "#1f2937",
-            "background": response.color_palette[1] if len(response.color_palette) > 1 else "#f9fafb",
-            "accent": response.color_palette[2] if len(response.color_palette) > 2 else "#2563eb",
+        palette_defaults = {
+            "primary": "#1f2937",
+            "background": "#f9fafb",
+            "accent": "#2563eb",
+            "secondary": "#a855f7",
+            "text": "#111827",
+            "text_muted": "#4b5563",
+            "border": "#d1d5db",
+            "on_primary": "#ffffff",
         }
-        font_map = {
-            "title": response.font_pairing[0] if response.font_pairing else "Roboto",
-            "body": response.font_pairing[1] if len(response.font_pairing) > 1 else "Source Sans",
-        }
+        palette_defaults.update(self._map_palette_entries(response.color_palette))
+
+        font_defaults = {"title": "Roboto", "body": "Source Sans"}
+        font_defaults.update(self._map_font_entries(response.font_pairing))
+
         return StyleProfile(
             theme=response.recommended_theme,
-            color_palette=palette_map,
-            font_pairing=font_map,
+            color_palette=palette_defaults,
+            font_pairing=font_defaults,
             layout_preference=response.layout_preference,
             reasoning=response.reasoning,
         )
+
+    @staticmethod
+    def _map_palette_entries(entries: list[ColorSwatch]) -> dict[str, str]:
+        mapping: dict[str, str] = {}
+
+        for swatch in entries:
+            name = swatch.name.lower()
+            usage = (swatch.usage or "").lower()
+
+            def matched(*keywords: str) -> bool:
+                return any(keyword in name for keyword in keywords) or any(keyword in usage for keyword in keywords)
+
+            key: str
+            if matched("background", "bg"):
+                key = "background"
+            elif matched("on_primary", "onprimary"):
+                key = "on_primary"
+            elif matched("muted", "subtle", "support"):
+                key = "text_muted"
+            elif matched("text", "copy", "body"):
+                key = "text"
+            elif matched("border", "divider", "line"):
+                key = "border"
+            elif matched("secondary"):
+                key = "secondary"
+            elif matched("accent", "highlight"):
+                key = "accent"
+            elif matched("primary"):
+                key = "primary"
+            elif "accent" in usage:
+                key = "accent"
+            elif "background" in usage:
+                key = "background"
+            elif "text" in usage:
+                key = "text"
+            else:
+                key = "accent" if "accent" in name or "accent" in usage else "primary"
+
+            mapping[key] = swatch.hex
+
+        return mapping
+
+    @staticmethod
+    def _map_font_entries(entries: list[FontPairing]) -> dict[str, str]:
+        mapping: dict[str, str] = {}
+
+        for font in entries:
+            role = font.role.lower()
+            if any(keyword in role for keyword in ["heading", "title", "header"]):
+                mapping["title"] = font.font_name
+            elif any(keyword in role for keyword in ["body", "paragraph", "text"]):
+                mapping["body"] = font.font_name
+            elif "caption" in role or "note" in role:
+                mapping.setdefault("caption", font.font_name)
+            elif "accent" in role or "display" in role:
+                mapping.setdefault("accent", font.font_name)
+            else:
+                mapping.setdefault("body", font.font_name)
+
+        return mapping
 
     def _match_default(self, title: str) -> StyleProfile:
         title_lower = title.lower()

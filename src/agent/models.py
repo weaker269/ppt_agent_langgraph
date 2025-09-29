@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
+
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 from .domain import QualityDimension, StyleTheme
 
@@ -46,11 +48,63 @@ class SlideResponse(BaseModel):
                 points.append(item)
         return points[:6]
 
+class ColorSwatch(BaseModel):
+    """描述单个色板条目。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    name: str = Field(..., min_length=1, max_length=60)
+    hex: str = Field(..., min_length=4, max_length=7)
+    usage: Optional[str] = Field(default=None, max_length=40)
+
+    @field_validator("name", "hex", "usage", mode="before")
+    def _strip_text(cls, value):  # noqa: N805
+        if value is None:
+            return value
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @field_validator("hex")
+    def _normalize_hex(cls, value: str) -> str:  # noqa: N805
+        if not value:
+            raise ValueError("颜色值不能为空")
+        candidate = value.upper().strip()
+        if not candidate.startswith('#'):
+            candidate = f"#{candidate}"
+        if not re.fullmatch(r"#(?:[0-9A-F]{3}|[0-9A-F]{6})", candidate):
+            raise ValueError("颜色值必须是 #RGB 或 #RRGGBB 形式")
+        return candidate
+
+
+class FontPairing(BaseModel):
+    """描述字体搭配条目。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    role: str = Field(..., min_length=1, max_length=40)
+    font_name: str = Field(..., min_length=1, max_length=60)
+    fallback: Optional[str] = Field(default=None, max_length=60)
+
+    @field_validator("role", "font_name", mode="before")
+    def _strip_required(cls, value: str) -> str:  # noqa: N805
+        if isinstance(value, str):
+            value = value.strip()
+        if not value:
+            raise ValueError("字段不能为空")
+        return value
+
+    @field_validator("fallback", mode="before")
+    def _strip_optional(cls, value):  # noqa: N805
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+
 
 class StyleAnalysisResponse(BaseModel):
     recommended_theme: StyleTheme
-    color_palette: List[str] = Field(default_factory=list)
-    font_pairing: List[str] = Field(default_factory=list)
+    color_palette: List[ColorSwatch] = Field(default_factory=list, max_length=8)
+    font_pairing: List[FontPairing] = Field(default_factory=list, max_length=6)
     layout_preference: str = "balanced"
     reasoning: str = Field(..., min_length=20, max_length=300)
 
@@ -86,6 +140,8 @@ __all__ = [
     "OutlineResponse",
     "OutlineSectionResponse",
     "SlideResponse",
+    "ColorSwatch",
+    "FontPairing",
     "StyleAnalysisResponse",
     "QualityAssessmentResponse",
     "ConsistencyAnalysisResponse",

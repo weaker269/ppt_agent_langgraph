@@ -10,7 +10,19 @@ from typing import Dict, Iterable, List
 
 LOGGER_NAME = "ppt_agent"
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+LOG_DIR = Path("logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_FILE_PATH = LOG_DIR / "ppt.log"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(LOG_FILE_PATH, encoding="utf-8")
+    ],
+    force=True,
+)
 logger = logging.getLogger(LOGGER_NAME)
 
 

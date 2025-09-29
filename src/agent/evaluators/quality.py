@@ -86,6 +86,9 @@ class QualityEvaluator:
             context=self._format_context(context_slides),
         )
 
+        logger.info("启动质量评估：slide_id=%s，标题《%s》", slide.slide_id, slide.title)
+        logger.debug("质量评估提示：%s", prompt)
+
         response = self.client.structured_completion(prompt, QualityAssessmentResponse, system=_QUALITY_SYSTEM_PROMPT)
         score = QualityScore(
             total_score=response.overall_score,
@@ -94,7 +97,24 @@ class QualityEvaluator:
             confidence=0.7,
         )
         feedback = self._build_feedback(response)
-        logger.debug("幻灯片 %s 质量得分 %.1f", slide.slide_id, score.total_score)
+
+        logger.info(
+            "质量评估完成：slide_id=%s，总分=%.1f，逻辑=%.1f，相关性=%.1f，语言=%.1f，版式=%.1f，通过=%s",
+            slide.slide_id,
+            score.total_score,
+            response.logic_score,
+            response.relevance_score,
+            response.language_score,
+            response.layout_score,
+            "通过" if response.pass_threshold else "未通过",
+        )
+        if response.strengths:
+            logger.debug("质量评估亮点：%s", "；".join(response.strengths))
+        if response.weaknesses:
+            logger.debug("质量评估待改进项：%s", "；".join(response.weaknesses))
+        if response.suggestions:
+            logger.debug("质量评估建议：%s", "；".join(response.suggestions))
+        logger.debug("质量评估原始响应：%s", response.model_dump())
         return score, feedback
 
     @staticmethod
