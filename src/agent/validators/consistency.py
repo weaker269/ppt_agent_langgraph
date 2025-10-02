@@ -9,7 +9,7 @@ from ..ai_client import AIModelClient
 from ..domain import ConsistencyIssue, ConsistencyIssueType, ConsistencyReport, SlideContent
 from ..models import ConsistencyAnalysisResponse
 from ..state import OverallState
-from ..utils import logger
+from ..utils import logger, snapshot_manager
 
 _CONSISTENCY_SYSTEM = """
 你是一位演示文稿一致性审查专家，需要指出逻辑断裂、术语不一致、风格冲突等问题。
@@ -73,7 +73,9 @@ class ConsistencyChecker:
             count=len(state.slides),
             slides=self._format_slides(state.slides),
         )
+        snapshot_manager.write_text(state.run_id, "04_consistency/prompt", prompt)
         response = self.client.structured_completion(prompt, ConsistencyAnalysisResponse, system=_CONSISTENCY_SYSTEM)
+        snapshot_manager.write_json(state.run_id, "04_consistency/response", response.model_dump())
         report = ConsistencyReport(
             overall_score=response.overall_score,
             issues=[self._convert_issue(item) for item in response.issues],
@@ -107,10 +109,10 @@ class ConsistencyChecker:
 
     def _augment_with_heuristics(self, slides: List[SlideContent], report: ConsistencyReport) -> None:
         # 检查重复标题
-        title_counts = Counter(slide.title for slide in slides)
+        title_counts = Counter((slide.page_title or slide.key_point or "") for slide in slides if (slide.page_title or slide.key_point))
         for title, count in title_counts.items():
             if count > 1:
-                slide_ids = [slide.slide_id for slide in slides if slide.title == title]
+                slide_ids = [slide.slide_id for slide in slides if (slide.page_title or slide.key_point or "") == title]
                 report.issues.append(
                     ConsistencyIssue(
                         issue_type=ConsistencyIssueType.REDUNDANT_CONTENT,

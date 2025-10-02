@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import textwrap
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Type, TypeVar
 
@@ -16,9 +17,7 @@ from pydantic import BaseModel
 
 from .domain import StyleTheme
 from .models import (
-    ColorSwatch,
     ConsistencyAnalysisResponse,
-    FontPairing,
     OutlineResponse,
     QualityAssessmentResponse,
     SlideResponse,
@@ -172,118 +171,135 @@ class AIModelClient:
         duration = data.get("estimated_duration")
         if isinstance(duration, str):
             digits = re.findall(r"\d+", duration)
-            if digits:
-                data["estimated_duration"] = int(digits[0])
-            else:
-                data["estimated_duration"] = 15
+            data["estimated_duration"] = int(digits[0]) if digits else 15
+        elif not isinstance(duration, int):
+            data["estimated_duration"] = 15
 
         sections = data.get("sections") or []
-        normalized_sections = []
+        normalized_sections: List[Dict[str, Any]] = []
         for idx, section in enumerate(sections, start=1):
             if not isinstance(section, dict):
                 continue
-            title = section.get("title") or section.get("section_title") or section.get("heading") or f"章节 {idx}"
+            title = (
+                section.get("title")
+                or section.get("section_title")
+                or section.get("heading")
+                or f"章节 {idx}"
+            )
             summary = section.get("summary") or section.get("section_summary") or ""
-            key_points = section.get("key_points") or section.get("bullets") or []
-            if isinstance(key_points, str):
-                key_points = [item.strip() for item in key_points.split("\n") if item.strip()]
+            key_points_raw = section.get("key_points") or section.get("bullets") or []
+            if isinstance(key_points_raw, str):
+                key_points_raw = [item.strip() for item in re.split(r"[\n\r]", key_points_raw) if item.strip()]
+
+            normalized_points: List[Dict[str, Any]] = []
+            for point_idx, item in enumerate(key_points_raw, 1):
+                if isinstance(item, dict):
+                    point_text = (item.get("point") or item.get("text") or item.get("value") or "").strip()
+                    template = (item.get("template_suggestion") or item.get("template") or item.get("layout") or "").strip()
+                else:
+                    point_text = str(item).strip()
+                    template = ""
+                if not point_text:
+                    continue
+                if template not in {
+                    "simple_content",
+                    "text_with_chart",
+                    "text_with_table",
+                    "full_width_image",
+                    "standard_single_column",
+                    "standard_dual_column",
+                    "title_section",
+                }:
+                    template = "simple_content"
+                normalized_points.append({"point": point_text, "template_suggestion": template})
+            if not normalized_points:
+                normalized_points.append({"point": title, "template_suggestion": "simple_content"})
+
             estimated = section.get("estimated_slides") or section.get("slides") or section.get("estimated_slide_count")
             if isinstance(estimated, str):
                 digits = re.findall(r"\d+", estimated)
                 estimated = int(digits[0]) if digits else 3
             if not isinstance(estimated, int):
                 estimated = 3
+
             normalized_sections.append(
                 {
                     "section_id": section.get("section_id") or idx,
                     "title": title,
                     "summary": summary,
-                    "key_points": key_points,
-                    "estimated_slides": estimated,
+                    "key_points": normalized_points,
+                    "estimated_slides": max(1, min(int(estimated), 10)),
                 }
             )
         data["sections"] = normalized_sections
         return data
-
     @staticmethod
     def _normalize_style_payload(data: Dict[str, Any]) -> Dict[str, Any]:
         theme_value = str(data.get("recommended_theme", ""))
-        matched = AIModelClient._match_theme(theme_value)
-        data["recommended_theme"] = matched
+        data["recommended_theme"] = AIModelClient._match_theme(theme_value)
 
-        palette_raw = data.get("color_palette") or []
-
-        def _normalize_swatch(item: Any, index: int) -> Dict[str, Any]:
-            if isinstance(item, ColorSwatch):
-                return item.model_dump()
-            if isinstance(item, dict):
-                name = (item.get("name") or item.get("label") or item.get("role") or f"Color {index}").strip()
-                hex_value = (item.get("hex") or item.get("value") or item.get("color") or "").strip()
-                usage = (item.get("usage") or item.get("role") or None)
-                return {"name": name, "hex": hex_value, "usage": usage}
-            if isinstance(item, str):
-                match = re.search(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})", item)
-                hex_value = match.group(0) if match else ""
-                name = item if not match else item.replace(match.group(0), "").replace("-", " ").strip()
-                return {"name": name or f"Color {index}", "hex": hex_value, "usage": None}
-            return {"name": f"Color {index}", "hex": "", "usage": None}
-
+        palette_raw = data.get("color_palette")
+        palette: Dict[str, str] = {}
         if isinstance(palette_raw, dict):
-            palette_iterable = [
-                {"name": key, "hex": value} if not isinstance(value, dict) else {"name": key, **value}
-                for key, value in palette_raw.items()
-            ]
-        else:
-            palette_iterable = list(palette_raw) if isinstance(palette_raw, (list, tuple)) else [palette_raw]
-
-        palette: List[Dict[str, Any]] = []
-        for idx, item in enumerate(palette_iterable, 1):
-            swatch = _normalize_swatch(item, idx)
-            if swatch.get("hex"):
-                palette.append(swatch)
+            for key, value in palette_raw.items():
+                if isinstance(value, str) and value.strip():
+                    palette[key.strip()] = value.strip()
+        elif isinstance(palette_raw, (list, tuple)):
+            for item in palette_raw:
+                if isinstance(item, dict):
+                    name = (item.get("usage") or item.get("name") or item.get("role") or "").strip()
+                    hex_value = (item.get("hex") or item.get("value") or item.get("color") or "").strip()
+                    if name and hex_value:
+                        palette[name] = hex_value
+                elif isinstance(item, str):
+                    match = re.search(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})", item)
+                    if match:
+                        palette[f"color_{len(palette)+1}"] = match.group(0)
         data["color_palette"] = palette
 
-        font_raw = data.get("font_pairing") or []
-
-        def _normalize_font(item: Any, index: int) -> Dict[str, Any]:
-            if isinstance(item, FontPairing):
-                return item.model_dump()
-            if isinstance(item, dict):
-                role = (item.get("role") or item.get("name") or item.get("usage") or f"Font {index}").strip()
-                font_name = (item.get("font_name") or item.get("font") or item.get("value") or "").strip()
-                fallback = (item.get("fallback") or item.get("fallback_font") or None)
-                return {"role": role, "font_name": font_name, "fallback": fallback}
-            if isinstance(item, str):
-                parts = [part.strip() for part in re.split(r"[:|-]", item, maxsplit=1) if part.strip()]
-                if len(parts) == 2:
-                    role, font_name = parts
-                else:
-                    role, font_name = ("title" if index == 1 else "body"), parts[0]
-                return {"role": role, "font_name": font_name, "fallback": None}
-            return {"role": f"Font {index}", "font_name": "", "fallback": None}
-
-        if isinstance(font_raw, dict):
-            font_iterable = [
-                {"role": key, "font_name": value} if not isinstance(value, dict) else {"role": key, **value}
-                for key, value in font_raw.items()
-            ]
+        chart_colors_raw = data.get("chart_colors")
+        if isinstance(chart_colors_raw, (list, tuple)):
+            chart_colors = [color for color in chart_colors_raw if isinstance(color, str) and color.strip()]
         else:
-            font_iterable = list(font_raw) if isinstance(font_raw, (list, tuple)) else [font_raw]
+            chart_colors = []
+        if len(chart_colors) < 4:
+            chart_colors.extend(["#2563eb", "#16a34a", "#f59e0b", "#f97316"])
+        data["chart_colors"] = chart_colors[:6]
 
-        fonts: List[Dict[str, Any]] = []
-        for idx, item in enumerate(font_iterable, 1):
-            font_info = _normalize_font(item, idx)
-            if font_info.get("font_name"):
-                fonts.append(font_info)
+        font_raw = data.get("font_pairing")
+        fonts: Dict[str, str] = {}
+        if isinstance(font_raw, dict):
+            for key, value in font_raw.items():
+                if isinstance(value, str) and value.strip():
+                    fonts[key.strip()] = value.strip()
+        elif isinstance(font_raw, (list, tuple)):
+            for item in font_raw:
+                if isinstance(item, dict):
+                    role = (item.get("role") or item.get("name") or item.get("usage") or "").strip()
+                    font_name = (item.get("font_name") or item.get("font") or item.get("value") or "").strip()
+                    if role and font_name:
+                        fonts[role] = font_name
+                elif isinstance(item, str):
+                    parts = [part.strip() for part in re.split(r"[:|-]", item, maxsplit=1) if part.strip()]
+                    if len(parts) == 2:
+                        fonts[parts[0]] = parts[1]
+        if "title" not in fonts:
+            fonts["title"] = "Roboto"
+        if "body" not in fonts:
+            fonts["body"] = "Source Sans"
         data["font_pairing"] = fonts
+
+        layout_pref = data.get("layout_preference")
+        if isinstance(layout_pref, str):
+            layout_pref = layout_pref.strip() or "balanced"
+        else:
+            layout_pref = "balanced"
+        data["layout_preference"] = layout_pref
 
         reasoning = data.get("reasoning")
         if isinstance(reasoning, str):
-            data["reasoning"] = reasoning.strip()[:300]
-
+            data["reasoning"] = reasoning.strip()
         return data
-
-    @staticmethod
     def _match_theme(raw: str) -> StyleTheme:
         value = raw.lower()
         if value in StyleTheme._value2member_map_:
@@ -320,7 +336,127 @@ class AIModelClient:
             data = AIModelClient._normalize_outline_payload(data)
         if model is StyleAnalysisResponse:
             data = AIModelClient._normalize_style_payload(data)
+        if model is QualityAssessmentResponse:
+            data = AIModelClient._normalize_quality_payload(data)
         return model(**data)
+
+
+
+
+@staticmethod
+def _normalize_quality_payload(data: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_score(payload: Any) -> Optional[float]:
+        if isinstance(payload, (int, float)):
+            return float(payload)
+        if isinstance(payload, str):
+            digits = re.findall(r"[-+]?[0-9]*\.?[0-9]+", payload)
+            if digits:
+                try:
+                    return float(digits[0])
+                except ValueError:
+                    return None
+            return None
+        if isinstance(payload, dict):
+            for key in ("score", "value", "rating", "overall", "total"):
+                if key in payload and payload[key] is not None:
+                    try:
+                        return float(payload[key])
+                    except (TypeError, ValueError):
+                        continue
+        return None
+
+    assessment = data.get("assessment")
+    if isinstance(assessment, dict):
+        for key, value in assessment.items():
+            score = _extract_score(value)
+            if score is not None:
+                data[key] = score
+
+    dimensions = {
+        "logic": "logic_score",
+        "logical": "logic_score",
+        "logic_dimension": "logic_score",
+        "relevance": "relevance_score",
+        "content": "relevance_score",
+        "language": "language_score",
+        "communication": "language_score",
+        "style": "layout_score",
+        "layout": "layout_score",
+        "visual": "layout_score",
+    }
+    for source, target in dimensions.items():
+        if isinstance(data.get(target), (int, float)):
+            continue
+        entry = data.get(source)
+        score = _extract_score(entry)
+        if score is not None:
+            data[target] = score
+
+    if not isinstance(data.get("overall_score"), (int, float)):
+        overall_entry = (
+            data.get("overall")
+            or data.get("summary")
+            or data.get("overall_assessment")
+            or (assessment.get("overall") if isinstance(assessment, dict) else None)
+        )
+        score = _extract_score(overall_entry)
+        if score is None:
+            collected = [
+                data.get("logic_score"),
+                data.get("relevance_score"),
+                data.get("language_score"),
+                data.get("layout_score"),
+            ]
+            collected = [value for value in collected if isinstance(value, (int, float))]
+            if collected:
+                score = sum(collected) / len(collected)
+        if score is not None:
+            data["overall_score"] = score
+
+    if "pass_threshold" not in data:
+        decision_keys = ("pass", "passed", "is_pass", "pass_threshold")
+        decided = False
+        for key in decision_keys:
+            if key in data:
+                value = data[key]
+                if isinstance(value, bool):
+                    data["pass_threshold"] = value
+                    decided = True
+                    break
+                if isinstance(value, str):
+                    lowered = value.strip().lower()
+                    if lowered in {"true", "pass", "yes", "通过"}:
+                        data["pass_threshold"] = True
+                        decided = True
+                        break
+                    if lowered in {"false", "fail", "no", "未通过"}:
+                        data["pass_threshold"] = False
+                        decided = True
+                        break
+        if not decided and isinstance(data.get("overall_score"), (int, float)):
+            data["pass_threshold"] = data["overall_score"] >= 85
+
+        if "strengths" not in data:
+            highlights = data.get("highlights") or data.get("advantages")
+            if isinstance(highlights, str):
+                data["strengths"] = [segment.strip() for segment in re.split(r"[\s;]", highlights) if segment.strip()]
+            elif isinstance(highlights, list):
+                data["strengths"] = [str(item).strip() for item in highlights if str(item).strip()]
+
+        if "weaknesses" not in data and isinstance(data.get("issues"), list):
+            data["weaknesses"] = [str(item).strip() for item in data["issues"] if str(item).strip()]
+
+        if "suggestions" not in data:
+            advice = data.get("recommendations") or data.get("actions")
+            if isinstance(advice, str):
+                data["suggestions"] = [segment.strip() for segment in re.split(r"[\s;]", advice) if segment.strip()]
+            elif isinstance(advice, list):
+                data["suggestions"] = [str(item).strip() for item in advice if str(item).strip()]
+
+    return data
+
+
+
 
     def _stub_response(self, prompt: str, model: Type[T]) -> T:
         if model is OutlineResponse:
@@ -338,13 +474,29 @@ class AIModelClient:
     def _stub_outline(self, text: str) -> OutlineResponse:
         paragraphs = text_tools.segment_paragraphs(text)
         sections = []
+        templates = [
+            "standard_single_column",
+            "standard_dual_column",
+            "text_with_chart",
+            "text_with_table",
+        ]
         for idx, para in enumerate(paragraphs[:5], 1):
+            key_points = []
+            for point_idx, item in enumerate(text_tools.extract_key_points(para, 4), 1):
+                key_points.append(
+                    {
+                        "point": item,
+                        "template_suggestion": templates[point_idx % len(templates)],
+                    }
+                )
             sections.append(
                 {
                     "section_id": idx,
                     "title": text_tools.derive_section_title(para, f"章节 {idx}"),
                     "summary": text_tools.summarise_text(para, 2),
-                    "key_points": text_tools.extract_key_points(para, 4),
+                    "key_points": key_points or [
+                        {"point": text_tools.summarise_text(para, 1), "template_suggestion": "simple_content"}
+                    ],
                     "estimated_slides": max(1, len(para) // 400 + 1),
                 }
             )
@@ -354,40 +506,62 @@ class AIModelClient:
                 {
                     "section_id": 1,
                     "title": "核心内容",
-                    "summary": "请补充输入信息",
-                    "key_points": ["关键点"],
+                    "summary": "请补充更多信息",
+                    "key_points": [
+                        {"point": "目标与背景", "template_suggestion": "standard_single_column"}
+                    ],
                     "estimated_slides": 2,
                 }
             ],
         )
 
+
     def _stub_slide(self, prompt: str) -> SlideResponse:
-        outline = text_tools.extract_key_points(prompt, 3)
+        outline = text_tools.extract_key_points(prompt, 4)
+        title = outline[0] if outline else text_tools.derive_title(prompt)[:50]
+        bullet_list = outline[1:] or ["关键要点一", "关键要点二"]
+        bullets_html = ''.join(f"<li>{item}</li>" for item in bullet_list[:4])
+        slide_html = textwrap.dedent(
+            f"""
+            <div class="slide-content">
+              <div class="page-header"><h2>{title}</h2></div>
+              <div class="content-grid grid-1-cols">
+                <div class="card">
+                  <ul>{bullets_html}</ul>
+                </div>
+              </div>
+            </div>
+            """
+        ).strip()
         return SlideResponse(
-            title=outline[0] if outline else text_tools.derive_title(prompt)[:50],
-            body="\n".join(outline[1:4]) or "补充说明",
-            bullet_points=outline or ["重点一", "重点二"],
-            speaker_notes="围绕要点展开说明",
+            slide_html=slide_html,
+            charts=[],
+            speaker_notes="围绕要点展开说明，强调亮点与行动建议。",
+            page_title=title,
             slide_type="content",
-            layout="standard",
+            layout_template="standard_single_column",
+            template_suggestion="standard_single_column",
         )
+
 
     def _stub_style(self, prompt: str) -> StyleAnalysisResponse:
         return StyleAnalysisResponse(
             recommended_theme=StyleTheme.PROFESSIONAL,
-            color_palette=[
-                ColorSwatch(name="Primary", hex="#1F2937", usage="primary"),
-                ColorSwatch(name="Background", hex="#F9FAFB", usage="background"),
-                ColorSwatch(name="Accent", hex="#2563EB", usage="accent"),
-                ColorSwatch(name="Muted Text", hex="#6B7280", usage="text_muted"),
-            ],
-            font_pairing=[
-                FontPairing(role="Headings", font_name="Roboto"),
-                FontPairing(role="Body Text", font_name="Noto Sans"),
-            ],
+            color_palette={
+                "primary": "#1F2937",
+                "background": "#F9FAFB",
+                "text": "#111827",
+                "text_muted": "#6B7280",
+                "accent": "#2563EB",
+                "on_primary": "#FFFFFF",
+                "border": "#D1D5DB",
+            },
+            chart_colors=["#2563EB", "#16A34A", "#F59E0B", "#F97316"],
+            font_pairing={"title": "Roboto", "body": "Noto Sans"},
             layout_preference="balanced",
-            reasoning="根据输入文本无法识别特定语境，默认提供专业主题配色与字体组合。",
+            reasoning="基于默认专业主题配色和字体，确保可读性与商业观感。",
         )
+
 
     def _stub_quality(self, prompt: str) -> QualityAssessmentResponse:
         base = 82.0

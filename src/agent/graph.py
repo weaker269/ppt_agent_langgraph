@@ -14,7 +14,7 @@ from .generators.outline import OutlineGenerator
 from .generators.style import StyleSelector
 from .renderers.html import HTMLRenderer
 from .state import OverallState
-from .utils import logger, result_saver
+from .utils import logger, result_saver, snapshot_manager
 from .validators import ConsistencyChecker
 
 
@@ -42,11 +42,29 @@ class PPTAgentGraph:
 
     def run(self, input_text: str = "", input_file_path: str = "") -> OverallState:
         state = OverallState(
+
             input_text=input_text,
+
             input_file_path=input_file_path,
+
             model_provider=self.client.config.provider,
+
             model_name=self.client.config.model,
+
         )
+
+        logger.info("启动 PPT 生成流程：RunId=%s", state.run_id)
+
+        snapshot_manager.write_json(state.run_id, "00_run/config", {
+
+            "provider": state.model_provider,
+
+            "model": state.model_name,
+
+            "quality_reflection": state.enable_quality_reflection,
+
+        })
+
         start_time = time.time()
         self._load_input(state)
         if state.errors:
@@ -88,20 +106,45 @@ class PPTAgentGraph:
         logger.info("已从文件读取输入: %s", path)
 
     def _persist(self, state: OverallState) -> None:
+
         if not state.html_output:
+
             return
+
         title = state.outline.title if state.outline else "presentation"
+
         safe_name = title.replace(" ", "_")[:50] or "presentation"
+
         html_path = result_saver.save_html(state.html_output, safe_name)
+
         metadata = {
+
+            "run_id": state.run_id,
+
             "title": state.outline.title if state.outline else "",
+
             "slide_count": len(state.slides),
+
             "quality": {slide_id: score.total_score for slide_id, score in state.slide_quality.items()},
+
             "consistency": state.consistency_report.overall_score if state.consistency_report else None,
+
             "theme": state.selected_style.theme.value if state.selected_style else "",
+
+            "chart_colors": state.selected_style.chart_colors if state.selected_style else [],
+
         }
+
         result_saver.save_json(metadata, f"{safe_name}_metadata")
+
+        snapshot_manager.write_json(state.run_id, "05_output/metadata", metadata)
+
         state.output_file_path = str(html_path)
+
+
+
+
+# ----------------------------------------------------------------------
 
 
 # ----------------------------------------------------------------------

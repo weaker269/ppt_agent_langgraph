@@ -6,7 +6,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional
 
 LOGGER_NAME = "ppt_agent"
 
@@ -52,6 +52,42 @@ class ResultSaver:
 
 result_saver = ResultSaver()
 
+
+class SnapshotManager:
+    """负责在 snapshots 目录下记录各阶段快照。"""
+
+    def __init__(self, base_dir: Path | None = None, enabled: bool = True) -> None:
+        self.base_dir = ensure_directory(base_dir or Path("snapshots"))
+        self.enabled = enabled
+
+    def _run_dir(self, run_id: str) -> Path:
+        return ensure_directory(self.base_dir / run_id)
+
+    def _prepare_path(self, run_id: str, name: str, suffix: str) -> Path:
+        relative = Path(name)
+        directory = self._run_dir(run_id) / relative.parent
+        ensure_directory(directory)
+        stem = relative.stem if relative.suffix else relative.name
+        return directory / f"{stem}{suffix}"
+
+    def write_json(self, run_id: str, name: str, payload: Dict[str, object]) -> Optional[Path]:
+        if not self.enabled or not run_id:
+            return None
+        path = self._prepare_path(run_id, name, ".json")
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.debug("写入快照: %s", path)
+        return path
+
+    def write_text(self, run_id: str, name: str, content: str) -> Optional[Path]:
+        if not self.enabled or not run_id:
+            return None
+        path = self._prepare_path(run_id, name, ".txt")
+        path.write_text(content, encoding="utf-8")
+        logger.debug("写入文本快照: %s", path)
+        return path
+
+
+snapshot_manager = SnapshotManager()
 
 def load_env_settings(path: str = ".env") -> Dict[str, str]:
     """读取 .env 配置并写入环境变量。"""
@@ -133,8 +169,10 @@ text_tools = _TextTools()
 __all__ = [
     "logger",
     "result_saver",
+    "snapshot_manager",
     "text_tools",
     "ensure_directory",
     "ResultSaver",
+    "SnapshotManager",
     "load_env_settings",
 ]

@@ -1,26 +1,47 @@
-"""Pydantic 模型：规范 LLM 结构化响应。"""
+
+"""Pydantic 模型：约束 LLM 的结构化响应格式。"""
 
 from __future__ import annotations
 
-import re
+from typing import Any, Dict, List, Optional
 
-from typing import List, Optional
-
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .domain import QualityDimension, StyleTheme
+
+
+# ---------------------------------------------------------------------------
+# 大纲响应结构
+# ---------------------------------------------------------------------------
+
+
+class OutlineKeyPointResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    point: str = Field(..., min_length=1, max_length=200)
+    template_suggestion: str = Field("simple_content", min_length=1, max_length=40)
+
+    @field_validator("point", mode="before")
+    def _strip_point(cls, value: str) -> str:  # noqa: N805
+        if isinstance(value, str):
+            value = value.strip()
+        if not value:
+            raise ValueError("要点内容不能为空")
+        return value
+
+    @field_validator("template_suggestion", mode="before")
+    def _normalize_template(cls, value: Optional[str]) -> str:  # noqa: N805
+        if isinstance(value, str):
+            value = value.strip().lower()
+        return value or "simple_content"
 
 
 class OutlineSectionResponse(BaseModel):
     section_id: int = Field(..., ge=1)
     title: str = Field(..., min_length=1, max_length=80)
     summary: str = Field("", max_length=300)
-    key_points: List[str] = Field(default_factory=list)
+    key_points: List[OutlineKeyPointResponse] = Field(default_factory=list, min_items=1)
     estimated_slides: int = Field(1, ge=1, le=10)
-
-    @field_validator("key_points", mode="before")
-    def _clean_points(cls, value: List[str]) -> List[str]:  # noqa: N805
-        return [point.strip() for point in value or [] if point and point.strip()]
 
 
 class OutlineResponse(BaseModel):
@@ -31,82 +52,71 @@ class OutlineResponse(BaseModel):
     sections: List[OutlineSectionResponse] = Field(default_factory=list, min_items=1, max_items=10)
 
 
-class SlideResponse(BaseModel):
-    title: str = Field(..., min_length=3, max_length=100)
-    body: str = Field("", max_length=2000)
-    bullet_points: List[str] = Field(default_factory=list, max_items=6)
-    speaker_notes: str = Field("", max_length=400)
-    slide_type: str = Field("content")
-    layout: str = Field("standard")
-
-    @field_validator("bullet_points", mode="before")
-    def _clean_points(cls, value: List[str]) -> List[str]:  # noqa: N805
-        points = []
-        for item in value or []:
-            item = item.strip().lstrip("*-•123456789. ")
-            if item:
-                points.append(item)
-        return points[:6]
-
-class ColorSwatch(BaseModel):
-    """描述单个色板条目。"""
-
-    model_config = ConfigDict(extra="ignore")
-
-    name: str = Field(..., min_length=1, max_length=60)
-    hex: str = Field(..., min_length=4, max_length=7)
-    usage: Optional[str] = Field(default=None, max_length=40)
-
-    @field_validator("name", "hex", "usage", mode="before")
-    def _strip_text(cls, value):  # noqa: N805
-        if value is None:
-            return value
-        if isinstance(value, str):
-            return value.strip()
-        return value
-
-    @field_validator("hex")
-    def _normalize_hex(cls, value: str) -> str:  # noqa: N805
-        if not value:
-            raise ValueError("颜色值不能为空")
-        candidate = value.upper().strip()
-        if not candidate.startswith('#'):
-            candidate = f"#{candidate}"
-        if not re.fullmatch(r"#(?:[0-9A-F]{3}|[0-9A-F]{6})", candidate):
-            raise ValueError("颜色值必须是 #RGB 或 #RRGGBB 形式")
-        return candidate
+# ---------------------------------------------------------------------------
+# 幻灯片内容响应结构
+# ---------------------------------------------------------------------------
 
 
-class FontPairing(BaseModel):
-    """描述字体搭配条目。"""
+class SlideChartResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
-    model_config = ConfigDict(extra="ignore")
+    element_id: str = Field(..., alias="elementId", min_length=3)
+    options: Dict[str, Any] = Field(...)
 
-    role: str = Field(..., min_length=1, max_length=40)
-    font_name: str = Field(..., min_length=1, max_length=60)
-    fallback: Optional[str] = Field(default=None, max_length=60)
-
-    @field_validator("role", "font_name", mode="before")
-    def _strip_required(cls, value: str) -> str:  # noqa: N805
+    @field_validator("element_id", mode="before")
+    def _strip_element_id(cls, value: str) -> str:  # noqa: N805
         if isinstance(value, str):
             value = value.strip()
         if not value:
-            raise ValueError("字段不能为空")
+            raise ValueError("elementId 不能为空")
         return value
 
-    @field_validator("fallback", mode="before")
-    def _strip_optional(cls, value):  # noqa: N805
+
+class SlideResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    slide_html: str = Field(..., alias="slide_html", min_length=20)
+    charts: List[SlideChartResponse] = Field(default_factory=list)
+    speaker_notes: str = Field("", min_length=0, max_length=800)
+    page_title: str = Field("", max_length=120)
+    slide_type: str = Field("content")
+    layout_template: str = Field("standard_single_column")
+    template_suggestion: str = Field("simple_content")
+
+    @field_validator("slide_html", mode="before")
+    def _trim_html(cls, value: str) -> str:  # noqa: N805
         if isinstance(value, str):
-            return value.strip() or None
+            value = value.strip()
+        if not value:
+            raise ValueError("slide_html 不能为空")
         return value
+
+    @field_validator("charts", mode="before")
+    def _ensure_list(cls, value):  # noqa: N805
+        if value is None:
+            return []
+        return value
+
+
+# ---------------------------------------------------------------------------
+# 样式响应结构
+# ---------------------------------------------------------------------------
 
 
 class StyleAnalysisResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     recommended_theme: StyleTheme
-    color_palette: List[ColorSwatch] = Field(default_factory=list, max_length=8)
-    font_pairing: List[FontPairing] = Field(default_factory=list, max_length=6)
+    color_palette: Dict[str, str] = Field(default_factory=dict)
+    chart_colors: List[str] = Field(default_factory=list, min_items=4)
+    font_pairing: Dict[str, str] = Field(default_factory=dict)
     layout_preference: str = "balanced"
-    reasoning: str = Field(..., min_length=20, max_length=300)
+    reasoning: str = Field(..., min_length=20, max_length=320)
+
+
+# ---------------------------------------------------------------------------
+# 质量评估响应结构
+# ---------------------------------------------------------------------------
 
 
 class QualityAssessmentResponse(BaseModel):
@@ -120,7 +130,7 @@ class QualityAssessmentResponse(BaseModel):
     suggestions: List[str] = Field(default_factory=list)
     pass_threshold: bool = True
 
-    def as_dimension_map(self) -> dict[str, float]:
+    def as_dimension_map(self) -> Dict[QualityDimension, float]:
         return {
             QualityDimension.LOGIC: self.logic_score,
             QualityDimension.RELEVANCE: self.relevance_score,
@@ -129,9 +139,14 @@ class QualityAssessmentResponse(BaseModel):
         }
 
 
+# ---------------------------------------------------------------------------
+# 一致性检查响应结构
+# ---------------------------------------------------------------------------
+
+
 class ConsistencyAnalysisResponse(BaseModel):
     overall_score: float = Field(..., ge=0.0, le=100.0)
-    issues: List[dict] = Field(default_factory=list)
+    issues: List[Dict[str, Any]] = Field(default_factory=list)
     strengths: List[str] = Field(default_factory=list)
     recommendations: List[str] = Field(default_factory=list)
 
@@ -139,9 +154,9 @@ class ConsistencyAnalysisResponse(BaseModel):
 __all__ = [
     "OutlineResponse",
     "OutlineSectionResponse",
+    "OutlineKeyPointResponse",
     "SlideResponse",
-    "ColorSwatch",
-    "FontPairing",
+    "SlideChartResponse",
     "StyleAnalysisResponse",
     "QualityAssessmentResponse",
     "ConsistencyAnalysisResponse",

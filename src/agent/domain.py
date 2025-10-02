@@ -1,18 +1,16 @@
-"""核心领域模型定义。
 
-该模块集中维护项目使用的所有结构化模型，供生成器、评估器、工作流共享。
-"""
+"""领域模型定义集合，统一描述 PPT Agent 的核心结构。"""
 
 from __future__ import annotations
 
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # ---------------------------------------------------------------------------
-# 基础枚举
+# 枚举定义
 # ---------------------------------------------------------------------------
 
 
@@ -45,20 +43,70 @@ class StyleTheme(str, Enum):
 
 
 # ---------------------------------------------------------------------------
-# 大纲定义
+# 大纲结构
 # ---------------------------------------------------------------------------
+
+
+_TEMPLATE_SUGGESTIONS = {
+    "simple_content",
+    "text_with_chart",
+    "text_with_table",
+    "full_width_image",
+    "standard_single_column",
+    "standard_dual_column",
+    "title_section",
+}
+
+
+class OutlineKeyPoint(BaseModel):
+    """章节下的单个要点，包含布局建议。"""
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    point: str = Field(..., min_length=1, max_length=200, description="要点内容")
+    template_suggestion: str = Field(
+        "simple_content",
+        min_length=1,
+        max_length=40,
+        description="针对该要点推荐的页面模板",
+    )
+
+    @field_validator("point", mode="before")
+    def _strip_point(cls, value: str) -> str:  # noqa: N805
+        if isinstance(value, str):
+            value = value.strip()
+        if not value:
+            raise ValueError("要点内容不能为空")
+        return value
+
+    @field_validator("template_suggestion", mode="before")
+    def _normalise_template(cls, value: Optional[str]) -> str:  # noqa: N805
+        suggestion = (value or "simple_content").strip().lower()
+        if suggestion not in _TEMPLATE_SUGGESTIONS:
+            return "simple_content"
+        return suggestion
 
 
 class OutlineSection(BaseModel):
     index: int = Field(..., ge=1)
     title: str = Field(..., min_length=1, max_length=80)
     summary: str = Field("", max_length=300)
-    key_points: List[str] = Field(default_factory=list)
+    key_points: List[OutlineKeyPoint] = Field(default_factory=list)
     estimated_slides: int = Field(1, ge=1, le=10)
 
     @field_validator("key_points", mode="before")
-    def _clean_points(cls, value: List[str]) -> List[str]:  # noqa: N805
-        return [point.strip() for point in value or [] if point and point.strip()]
+    def _clean_points(cls, value: Optional[List[Any]]) -> List[Any]:  # noqa: N805
+        if not value:
+            return []
+        normalised: List[Any] = []
+        for item in value:
+            if isinstance(item, OutlineKeyPoint):
+                normalised.append(item)
+            elif isinstance(item, dict):
+                normalised.append(item)
+            elif isinstance(item, str):
+                normalised.append({"point": item})
+        return normalised
 
 
 class PresentationOutline(BaseModel):
@@ -70,30 +118,65 @@ class PresentationOutline(BaseModel):
 
     @property
     def total_slides(self) -> int:
-        return sum(section.estimated_slides for section in self.sections) + 2  # title + summary
+        """粗略估算总页数：标题页 + 总结页 + 各章节估算。"""
+
+        return sum(section.estimated_slides for section in self.sections) + 2
 
 
 # ---------------------------------------------------------------------------
-# 幻灯片定义
+# 幻灯片内容
 # ---------------------------------------------------------------------------
+
+
+class EChart(BaseModel):
+    """ECharts 配置载体。"""
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    element_id: str = Field(..., alias="elementId", min_length=3, description="容器 DOM ID")
+    options: Dict[str, Any] = Field(..., description="完整的 ECharts option 对象")
+
+    @field_validator("element_id", mode="before")
+    def _strip_element_id(cls, value: str) -> str:  # noqa: N805
+        if isinstance(value, str):
+            value = value.strip()
+        if not value:
+            raise ValueError("图表 elementId 不能为空")
+        return value
 
 
 class SlideContent(BaseModel):
+    """单页幻灯片的结构化蓝图。"""
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
     slide_id: int
-    title: str
-    body: str = ""
-    bullet_points: List[str] = Field(default_factory=list)
-    speaker_notes: str = ""
+    section_title: str = ""
+    section_summary: str = ""
+    key_point: str = ""
+    template_suggestion: str = "simple_content"
     slide_type: SlideType = SlideType.CONTENT
-    layout: SlideLayout = SlideLayout.STANDARD
-    annotations: Dict[str, str] = Field(default_factory=dict)
+    layout_template: str = Field("standard_single_column", description="使用的布局模板名称")
+    page_title: str = Field("", max_length=120, description="幻灯片显示标题")
+    slide_html: str = Field(..., description="完整的 HTML 结构字符串")
+    charts: List[EChart] = Field(default_factory=list, description="本页涉及的 ECharts 配置")
+    speaker_notes: str = ""
     quality_score: Optional[float] = None
     reflection_count: int = 0
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="扩展字段保留位")
 
-    def as_dict(self) -> Dict[str, object]:
-        payload = self.model_dump()
-        payload["bullet_points"] = [bp for bp in self.bullet_points if bp]
-        return payload
+    @field_validator("slide_html", mode="before")
+    def _ensure_html(cls, value: str) -> str:  # noqa: N805
+        if isinstance(value, str):
+            value = value.strip()
+        if not value:
+            raise ValueError("slide_html 不能为空")
+        return value
+
+    def as_dict(self, *, by_alias: bool = False) -> Dict[str, Any]:
+        """导出为渲染层可直接消费的字典。"""
+
+        return self.model_dump(by_alias=by_alias)
 
 
 class SlidingSummary(BaseModel):
@@ -104,7 +187,7 @@ class SlidingSummary(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# 质量与一致性
+# 质量评估结构
 # ---------------------------------------------------------------------------
 
 
@@ -153,13 +236,14 @@ class ConsistencyReport(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# 样式模型
+# 样式配置
 # ---------------------------------------------------------------------------
 
 
 class StyleProfile(BaseModel):
     theme: StyleTheme
     color_palette: Dict[str, str] = Field(default_factory=dict)
+    chart_colors: List[str] = Field(default_factory=list, description="推荐的图表颜色序列")
     font_pairing: Dict[str, str] = Field(default_factory=dict)
     layout_preference: str = "balanced"
     reasoning: str = ""
@@ -169,14 +253,17 @@ __all__ = [
     "SlideType",
     "SlideLayout",
     "StyleTheme",
+    "OutlineKeyPoint",
     "OutlineSection",
     "PresentationOutline",
     "SlideContent",
     "SlidingSummary",
+    "EChart",
     "QualityDimension",
     "QualityScore",
     "QualityFeedback",
     "ConsistencyReport",
     "ConsistencyIssue",
+    "ConsistencyIssueType",
     "StyleProfile",
 ]

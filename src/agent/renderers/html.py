@@ -1,9 +1,11 @@
-"""HTML 渲染器：输出带主题的演示文稿。"""
+
+"""HTML 渲染器：负责将结构化幻灯片输出为可交互页面。"""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
 
 from jinja2 import Environment, FileSystemLoader
 
@@ -15,56 +17,292 @@ _TEMPLATE_DIR = Path(__file__).parent / "templates"
 ensure_directory(_TEMPLATE_DIR)
 
 _BASE_TEMPLATE = """<!DOCTYPE html>
-<html lang=\"zh\">
+<html lang="zh">
   <head>
-    <meta charset=\"utf-8\" />
+    <meta charset="utf-8" />
     <title>{{ title }}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
-      body { background: {{ palette.background }}; color: {{ palette.text }}; font-family: {{ fonts.body }}, sans-serif; margin: 0; }
-      header { background: {{ palette.primary }}; color: {{ palette.on_primary }}; padding: 28px 8%; }
-      header h1 { margin: 0; font-family: {{ fonts.title }}, sans-serif; }
-      header p { margin-top: 8px; opacity: 0.85; }
-      section.slide { padding: 32px 10%; border-bottom: 1px solid {{ palette.border }}; }
-      section.slide h2 { margin-top: 0; font-family: {{ fonts.title }}, sans-serif; }
-      ul { padding-left: 1.4em; }
-      .meta { font-size: 0.9rem; color: {{ palette.text_muted }}; }
-      .quality { background: {{ palette.accent }}22; border-left: 4px solid {{ palette.accent }}; padding: 12px 16px; margin: 24px 10%; font-size: 0.95rem; }
-      footer { padding: 24px 10%; font-size: 0.85rem; color: {{ palette.text_muted }}; }
+      :root {
+        color-scheme: light;
+      }
+      body {
+        background: {{ palette.background }};
+        color: {{ palette.text }};
+        font-family: {{ fonts.body }}, sans-serif;
+        margin: 0;
+        overflow: hidden;
+      }
+      header {
+        background: {{ palette.primary }};
+        color: {{ palette.on_primary }};
+        padding: 28px 6%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      header h1 {
+        margin: 0;
+        font-family: {{ fonts.title }}, sans-serif;
+        font-size: 1.8rem;
+      }
+      header p {
+        margin: 4px 0 0;
+        opacity: 0.85;
+      }
+      .deck {
+        position: relative;
+        height: calc(100vh - 160px);
+        margin: 0 auto;
+        width: min(1200px, 94vw);
+      }
+      .slide {
+        display: none;
+        position: absolute;
+        inset: 0;
+        overflow-y: auto;
+        padding: 40px 7%;
+        box-sizing: border-box;
+        background: {{ palette.background }};
+        transition: opacity 0.3s ease;
+      }
+      .slide.active {
+        display: block;
+      }
+      .slide-content {
+        background: rgba(255, 255, 255, 0.9);
+        border-radius: 18px;
+        padding: 32px 40px;
+        box-shadow: 0 18px 38px rgba(15, 23, 42, 0.12);
+      }
+      .slide-transition {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        justify-content: center;
+        height: 100%;
+        background: linear-gradient(135deg, {{ palette.primary }}, {{ palette.accent }});
+        color: {{ palette.on_primary }};
+        padding: 60px 10%;
+        border-radius: 24px;
+        box-shadow: 0 18px 48px rgba(15, 23, 42, 0.2);
+      }
+      .slide-transition h1, .slide-transition h2 {
+        margin: 0 0 12px;
+        font-family: {{ fonts.title }}, sans-serif;
+      }
+      .page-header h2 {
+        margin: 0 0 16px;
+        font-size: 1.6rem;
+        font-family: {{ fonts.title }}, sans-serif;
+        color: {{ palette.primary }};
+      }
+      .content-grid {
+        display: grid;
+        gap: 24px;
+      }
+      .grid-2-cols {
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      }
+      .grid-1-cols {
+        grid-template-columns: 1fr;
+      }
+      .card {
+        background: rgba(255, 255, 255, 0.95);
+        border-radius: 16px;
+        padding: 24px;
+        box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08);
+      }
+      .card h3 {
+        margin-top: 0;
+        font-family: {{ fonts.title }}, sans-serif;
+        color: {{ palette.primary }};
+      }
+      ul {
+        padding-left: 1.4em;
+      }
+      li + li {
+        margin-top: 0.4em;
+      }
+      .styled-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.95rem;
+      }
+      .styled-table th, .styled-table td {
+        border: 1px solid {{ palette.border }};
+        padding: 12px 14px;
+        text-align: left;
+      }
+      .styled-table th {
+        background: {{ palette.accent }}15;
+      }
+      .speaker-notes {
+        margin-top: 24px;
+        font-size: 0.9rem;
+        color: {{ palette.text_muted }};
+      }
+      .speaker-notes summary {
+        cursor: pointer;
+      }
+      .nav-controls {
+        position: fixed;
+        bottom: 36px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        background: rgba(15, 23, 42, 0.75);
+        color: #fff;
+        padding: 10px 18px;
+        border-radius: 999px;
+        box-shadow: 0 12px 24px rgba(15, 23, 42, 0.2);
+        font-size: 0.95rem;
+      }
+      .nav-controls button {
+        background: transparent;
+        border: none;
+        color: inherit;
+        font-size: 1.05rem;
+        cursor: pointer;
+        padding: 6px 10px;
+      }
+      .nav-controls button:hover {
+        color: {{ palette.accent }};
+      }
+      footer {
+        padding: 18px 6%;
+        font-size: 0.85rem;
+        color: {{ palette.text_muted }};
+      }
+      .intro-slide .intro-meta {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 18px;
+        margin-top: 24px;
+      }
+      .intro-slide .meta-item {
+        background: rgba(255, 255, 255, 0.85);
+        border-radius: 14px;
+        padding: 18px 22px;
+        box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08);
+      }
+      .intro-slide .meta-item span {
+        display: block;
+        font-size: 0.85rem;
+        color: {{ palette.text_muted }};
+      }
+      .intro-slide .meta-item strong {
+        display: block;
+        margin-top: 6px;
+        font-size: 1.1rem;
+        color: {{ palette.primary }};
+      }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js" defer></script>
   </head>
   <body>
     <header>
-      <h1>{{ title }}</h1>
-      <p>{{ subtitle }} · 预计 {{ duration }} 分钟 · 共 {{ slide_count }} 页</p>
+      <div>
+        <h1>{{ title }}</h1>
+        <p>{{ subtitle }} · 预计 {{ duration }} 分钟 · 共 {{ slide_count }} 页</p>
+      </div>
+      <div>
+        <small>主题：{{ style.theme.value }}</small>
+      </div>
     </header>
     {% if quality_summary %}
-    <div class=\"quality\">
-      <strong>质量评估概览：</strong>
-      <p>平均分 {{ quality_summary.average }} 分，低于阈值的幻灯片：{{ quality_summary.below_threshold|join(', ') if quality_summary.below_threshold else '无' }}</p>
+    <div class="quality" style="margin: 18px 6%; background: {{ palette.accent }}18; border-left: 4px solid {{ palette.accent }}; padding: 14px 18px; border-radius: 12px;">
+      <strong>质量概览</strong>
+      <p>平均分 {{ '%.1f'|format(quality_summary.average) }}，低于阈值的页码：{{ quality_summary.below_threshold|join(', ') if quality_summary.below_threshold else '无' }}</p>
     </div>
     {% endif %}
     {% if consistency %}
-    <div class=\"quality\">
-      <strong>一致性得分：</strong> {{ consistency.score }} 分
-      {% if consistency.issues %}
-      <p>问题：{{ consistency.issues }}</p>
-      {% endif %}
+    <div class="quality" style="margin: 18px 6%; background: {{ palette.accent }}12; border-left: 4px solid {{ palette.accent }}; padding: 14px 18px; border-radius: 12px;">
+      <strong>一致性评分</strong>：{{ consistency.score }}
+      {% if consistency.issues %}<p>{{ consistency.issues }}</p>{% endif %}
     </div>
     {% endif %}
-    {% for slide in slides %}
-    <section class=\"slide\">
-      <h2>{{ slide.title }}</h2>
-      {% if slide.body %}<p>{{ slide.body }}</p>{% endif %}
-      {% if slide.bullet_points %}
-      <ul>
-        {% for item in slide.bullet_points %}<li>{{ item }}</li>{% endfor %}
-      </ul>
-      {% endif %}
-      {% if slide.speaker_notes %}<p class=\"meta\">讲者备注：{{ slide.speaker_notes }}</p>{% endif %}
-      {% if slide.quality_score %}<p class=\"meta\">质量得分：{{ '%.1f'|format(slide.quality_score) }}</p>{% endif %}
-    </section>
-    {% endfor %}
-    <footer>由 PPT Agent 自动生成 · 模式：{{ style.reasoning }}</footer>
+    <div class="deck">
+      {% for slide in slides %}
+      <section class="slide{% if loop.first %} active{% endif %}" data-slide-index="{{ loop.index0 }}">
+        <div class="slide-inner">
+          {{ slide.html | safe }}
+          {% if slide.notes %}
+          <details class="speaker-notes">
+            <summary>讲者备注</summary>
+            <p>{{ slide.notes }}</p>
+          </details>
+          {% endif %}
+        </div>
+      </section>
+      {% endfor %}
+    </div>
+    <div class="nav-controls">
+      <button type="button" data-action="prev">← 上一页</button>
+      <span id="slide-indicator">1 / {{ slide_count }}</span>
+      <button type="button" data-action="next">下一页 →</button>
+    </div>
+    <footer>由 PPT Agent 自动生成 · {{ style.reasoning }}</footer>
+    <script>
+      const slidesData = {{ slides_json | safe }};
+      const slides = Array.from(document.querySelectorAll('.slide'));
+      const indicator = document.getElementById('slide-indicator');
+      const chartCache = new Map();
+      let current = 0;
+
+      function renderCharts(index) {
+        const slideData = slidesData[index];
+        if (!slideData || !slideData.charts || !window.echarts) return;
+        slideData.charts.forEach(chart => {
+          const element = document.getElementById(chart.elementId);
+          if (!element) return;
+          if (chartCache.has(chart.elementId)) {
+            const instance = chartCache.get(chart.elementId);
+            instance.resize();
+            return;
+          }
+          const instance = echarts.init(element);
+          instance.setOption(chart.options);
+          chartCache.set(chart.elementId, instance);
+        });
+      }
+
+      function showSlide(index) {
+        if (index < 0 || index >= slides.length) return;
+        slides[current].classList.remove('active');
+        current = index;
+        slides[current].classList.add('active');
+        indicator.textContent = `${current + 1} / ${slides.length}`;
+        renderCharts(current);
+      }
+
+      function nextSlide() {
+        const target = current + 1 >= slides.length ? slides.length - 1 : current + 1;
+        showSlide(target);
+      }
+
+      function prevSlide() {
+        const target = current - 1 <= 0 ? 0 : current - 1;
+        showSlide(target);
+      }
+
+      document.querySelector('[data-action="next"]').addEventListener('click', nextSlide);
+      document.querySelector('[data-action="prev"]').addEventListener('click', prevSlide);
+
+      document.addEventListener('keydown', event => {
+        if (event.key === 'ArrowRight' || event.key === 'PageDown') {
+          nextSlide();
+        }
+        if (event.key === 'ArrowLeft' || event.key === 'PageUp') {
+          prevSlide();
+        }
+      });
+
+      showSlide(0);
+      window.addEventListener('resize', () => renderCharts(current));
+    </script>
   </body>
 </html>
 """
@@ -76,14 +314,14 @@ if not _TEMPLATE_PATH.exists():
 
 
 class HTMLRenderer:
-    """基于模板的渲染器。"""
+    """将状态中的幻灯片渲染为交互式 HTML。"""
 
     def __init__(self) -> None:
         self.template = _ENV.get_template("base.html")
 
     def render_presentation(self, state: OverallState) -> OverallState:
         if not state.slides:
-            state.record_error("缺少幻灯片内容，无法渲染 HTML")
+            state.record_error("缺少幻灯片数据，无法渲染 HTML")
             return state
 
         base_profile = state.selected_style or StyleProfile(theme=StyleTheme.PROFESSIONAL)
@@ -92,6 +330,16 @@ class HTMLRenderer:
             "title": base_profile.font_pairing.get("title", "Roboto"),
             "body": base_profile.font_pairing.get("body", "Source Sans"),
         }
+        slides_payload = [
+            {
+                "id": slide.slide_id,
+                "html": slide.slide_html,
+                "notes": slide.speaker_notes,
+                "charts": [chart.model_dump(by_alias=True) for chart in slide.charts],
+                "title": slide.page_title or slide.key_point,
+            }
+            for slide in state.slides
+        ]
         quality_summary = self._summarise_quality(state)
         consistency = self._summarise_consistency(state)
         html = self.template.render(
@@ -99,7 +347,8 @@ class HTMLRenderer:
             subtitle=state.outline.subtitle if state.outline else "",
             duration=state.outline.estimated_duration if state.outline else 15,
             slide_count=len(state.slides),
-            slides=[slide.as_dict() for slide in state.slides],
+            slides=slides_payload,
+            slides_json=json.dumps(slides_payload, ensure_ascii=False),
             palette=palette,
             fonts=fonts,
             style=base_profile,

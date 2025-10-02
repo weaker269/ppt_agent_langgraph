@@ -1,8 +1,10 @@
-"""全局状态管理模块。"""
+
+"""全局状态与元数据模型。"""
 
 from __future__ import annotations
 
 from typing import Dict, List, Optional
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -28,20 +30,24 @@ class GenerationMetadata(BaseModel):
 
 
 class OverallState(BaseModel):
-    """LangGraph 节点间传递的共享状态。"""
+    """LangGraph 节点间传递的全局状态。"""
+
+    # 运行信息
+    run_id: str = Field(default_factory=lambda: uuid4().hex[:12])
+    snapshot_enabled: bool = True
 
     # 输入
     input_text: str = ""
     input_file_path: str = ""
 
-    # 配置
+    # 模型配置
     model_provider: str = "openai"
     model_name: str = "gpt-3.5-turbo"
     enable_quality_reflection: bool = True
     quality_threshold: float = 85.0
     max_reflection_attempts: int = 2
 
-    # 主数据
+    # 生成结果
     outline: Optional[PresentationOutline] = None
     slides: List[SlideContent] = Field(default_factory=list)
     sliding_summaries: List[SlidingSummary] = Field(default_factory=list)
@@ -49,12 +55,12 @@ class OverallState(BaseModel):
     html_output: str = ""
     output_file_path: str = ""
 
-    # 质量与一致性
+    # 质量与评估
     slide_quality: Dict[int, QualityScore] = Field(default_factory=dict)
     quality_feedback: Dict[int, List[QualityFeedback]] = Field(default_factory=dict)
     consistency_report: Optional[ConsistencyReport] = None
 
-    # 运行元数据
+    # 元数据
     generation_metadata: List[GenerationMetadata] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
     errors: List[str] = Field(default_factory=list)
