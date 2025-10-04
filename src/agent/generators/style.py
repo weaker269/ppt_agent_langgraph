@@ -12,28 +12,39 @@ from ..state import OverallState
 from ..utils import logger, snapshot_manager
 
 _STYLE_SYSTEM_PROMPT = """
-你是一位顶级的品牌与视觉设计总监，精通色彩心理学和信息设计。你的任务是根据演示文稿的主题与章节内容，推荐一套完整的样式主题。
-请仅输出 JSON，包含以下字段：
-{
-  "recommended_theme": "professional|modern|creative|academic|minimal",
-  "color_palette": {
-    "primary": "#RRGGBB",
-    "background": "#RRGGBB",
-    "text": "#RRGGBB",
-    "text_muted": "#RRGGBB",
-    "accent": "#RRGGBB",
-    "on_primary": "#FFFFFF",
-    "border": "#DDDDDD"
-  },
-  "chart_colors": ["#RRGGBB", "#RRGGBB", "#RRGGBB", "#RRGGBB"],
-  "font_pairing": {
-    "title": "string",
-    "body": "string"
-  },
-  "layout_preference": "balanced|wide|dynamic|structured|compact",
-  "reasoning": "不超过280字的中文说明，强调色彩和字体如何服务于信息传达"
-}
-所有颜色必须是合法的十六进制色值，chart_colors 至少提供 4 个互有区分度的颜色。
+您是一位顶级的品牌与视觉设计总监，精通色彩心理学和信息设计。您的任务是根据演示文稿的主题与章节内容，推荐一套完整的样式主题。
+
+**指令**:
+1.  **分析内容**: 基于下方提供的标题、受众和章节摘要，判断演示文稿的整体风格需求。
+2.  **推荐主题**: 从 `professional`, `modern`, `creative`, `academic`, `minimal` 中选择一个最贴切的主题风格。
+3.  **设计配色**: 提供一套完整的16进制颜色代码方案，确保色彩搭配和谐且符合主题。
+4.  **推荐字体**: 为标题和正文推荐合适的字体组合。
+5.  **布局建议**: 推荐一种整体的布局偏好。
+6.  **阐述理由**: 用简短的中文解释您的设计思路，说明色彩和字体如何服务于信息传达。
+7.  **严格格式化输出**: 您的唯一合法输出就是一个严格遵循以下定义的扁平化 JSON 对象。
+
+**输出 JSON 格式定义**:
+- **重要规则**: 如果 JSON 字符串的值中包含双引号（"），您必须使用反斜杠进行转义（\\"）。
+```json
+{{
+  "recommended_theme": "string // 必填，从 'professional', 'modern', 'creative', 'academic', 'minimal' 中选择",
+  "color_palette": {{
+    "primary": "string // 主色, #RRGGBB 格式",
+    "background": "string // 背景色, #RRGGBB 格式",
+    "text": "string // 主要文本颜色, #RRGGBB 格式",
+    "text_muted": "string // 次要文本颜色, #RRGGBB 格式",
+    "accent": "string // 强调色, #RRGGBB 格式",
+    "on_primary": "string // 在主色上的文本颜色 (如 #FFFFFF), #RRGGBB 格式",
+    "border": "string // 边框颜色 (如 #DDDDDD), #RRGGBB 格式"
+  }},
+  "chart_colors": "array[string] // 图表颜色序列，至少提供 4 个 #RRGGBB 格式的颜色值",
+  "font_pairing": {{
+    "title": "string // 标题字体名称",
+    "body": "string // 正文字体名称"
+  }},
+  "layout_preference": "string // 布局偏好，从 'balanced', 'wide', 'dynamic', 'structured', 'compact' 中选择",
+  "reasoning": "string // 设计理由，不超过280字的中文说明"
+}}
 """
 
 _STYLE_PROMPT_TEMPLATE = """
@@ -96,30 +107,55 @@ class StyleSelector:
     def __init__(self, client: AIModelClient | None = None) -> None:
         self.client = client or AIModelClient(AIConfig(enable_stub=True))
 
-    def select_style_theme(self, state: OverallState) -> OverallState:
-        outline = state.outline
-        if not outline:
-            state.selected_style = _DEFAULT_PALETTES[StyleTheme.PROFESSIONAL]
-            return state
-
-        prompt = _STYLE_PROMPT_TEMPLATE.format(
-            title=outline.title,
-            audience=outline.target_audience,
-            sections="\n".join(f"- {section.title}: {section.summary}" for section in outline.sections[:6]),
-        )
-        snapshot_manager.write_text(state.run_id, "02_style/prompt", prompt)
-        try:
-            response = self.client.structured_completion(prompt, StyleAnalysisResponse, system=_STYLE_SYSTEM_PROMPT)
-            snapshot_manager.write_json(state.run_id, "02_style/response", response.model_dump())
-            palette = self._build_profile(response)
-            state.selected_style = palette
-            logger.info("样式选择：%s", palette.theme.value)
-        except Exception as exc:  # pragma: no cover - 异常
-            logger.error("样式选择失败，使用默认主题: %s", exc)
-            state.selected_style = self._match_default(outline.title)
-            snapshot_manager.write_json(state.run_id, "02_style/fallback", state.selected_style.model_dump())
-        return state
-
+    def select_style_theme(self, state: OverallState) -> OverallState:
+
+        outline = state.outline
+
+        if not outline:
+
+            state.selected_style = _DEFAULT_PALETTES[StyleTheme.PROFESSIONAL]
+
+            return state
+
+
+
+        prompt = _STYLE_PROMPT_TEMPLATE.format(
+
+            title=outline.title,
+
+            audience=outline.target_audience,
+
+            sections="\n".join(f"- {section.title}: {section.summary}" for section in outline.sections[:6]),
+
+        )
+
+        snapshot_manager.write_text(state.run_id, "02_style/prompt", prompt)
+
+        context = {"run_id": state.run_id, "stage": "02_style", "name": "style"}
+        try:
+
+            response = self.client.structured_completion(prompt, StyleAnalysisResponse, system=_STYLE_SYSTEM_PROMPT, context=context)
+
+            snapshot_manager.write_json(state.run_id, "02_style/response", response.model_dump())
+
+            palette = self._build_profile(response)
+
+            state.selected_style = palette
+
+            logger.info("样式选择：%s", palette.theme.value)
+
+        except Exception as exc:  # pragma: no cover - 异常
+
+            logger.error("样式选择失败，使用默认主题: %s", exc)
+
+            state.selected_style = self._match_default(outline.title)
+
+            snapshot_manager.write_json(state.run_id, "02_style/fallback", state.selected_style.model_dump())
+
+        return state
+
+
+
     def _build_profile(self, response: StyleAnalysisResponse) -> StyleProfile:
         palette_defaults = {
             "primary": "#1f2937",

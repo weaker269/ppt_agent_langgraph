@@ -9,11 +9,10 @@ import json
 import logging
 import os
 import re
-import textwrap
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Type, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from .domain import StyleTheme
 from .models import (
@@ -23,7 +22,7 @@ from .models import (
     SlideResponse,
     StyleAnalysisResponse,
 )
-from .utils import text_tools
+from .utils import snapshot_manager, text_tools
 
 logger = logging.getLogger(__name__)
 
@@ -53,17 +52,92 @@ class AIModelClient:
     # 公共接口
     # ------------------------------------------------------------------
 
-    def structured_completion(self, prompt: str, model: Type[T], system: str = "") -> T:
-        if self.config.enable_stub:
-            return self._stub_response(prompt, model)
+    def structured_completion(
+        self,
+        prompt: str,
+        model: Type[T],
+        system: str = "",
+        context: Optional[Dict[str, Any]] = None,
+    ) -> T:
+        """向模型请求结构化结果，并在出现解析问题时尝试自动修复或回退。"""
 
-        raw = self._call_model(prompt, system)
-        if not raw.strip():
-            logger.warning("模型返回内容为空，切换至 stub 模式")
-            self.config.enable_stub = True
-            return self._stub_response(prompt, model)
+        context = context or {}
+        prompt_attempt = prompt
 
-        return self._parse_json(raw, model)
+        for attempt in range(2):
+            if self.config.enable_stub:
+                logger.debug("使用 stub 响应: %s", model.__name__)
+                return self._stub_response(prompt_attempt, model)
+
+            raw = self._call_model(prompt_attempt, system)
+            if not raw.strip():
+                logger.warning("模型返回结果为空，切换到 stub 模式")
+                self.config.enable_stub = True
+                continue
+
+            try:
+                return self._parse_json(raw, model, context=context)
+            except (json.JSONDecodeError, ValidationError) as exc:
+                self._log_parse_failure(exc, raw, prompt_attempt, model, context, attempt)
+                if attempt == 0 and not self.config.enable_stub:
+                    prompt_attempt = self._augment_prompt_for_retry(prompt, model)
+                    continue
+                self.config.enable_stub = True
+
+        return self._stub_response(prompt_attempt, model)
+
+    def _log_parse_failure(
+        self,
+        error: Exception,
+        raw: str,
+        prompt: str,
+        model: Type[T],
+        context: Dict[str, Any],
+        attempt: int,
+    ) -> None:
+        logger.error("解析模型输出失败: %s", error)
+        self._save_snapshot(context, raw, model, suffix=f"_attempt{attempt}_raw")
+        if attempt == 0:
+            self._save_snapshot(context, prompt, model, suffix=f"_attempt{attempt}_prompt")
+
+    @staticmethod
+    def _augment_prompt_for_retry(original_prompt: str, model: Type[T]) -> str:
+        retry_instruction = "\n\nPlease return only a valid JSON object with double quotes and no extra text."
+
+        if retry_instruction.strip() in original_prompt:
+            return original_prompt
+        return f"{original_prompt}{retry_instruction}"
+
+    @staticmethod
+    def _extract_json_block(text: str) -> str:
+        if "```" in text:
+            matches = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+            if matches:
+                return matches[-1]
+
+        start = text.find('{')
+        if start == -1:
+            return text
+
+        depth = 0
+        for idx in range(start, len(text)):
+            char = text[idx]
+            if char == '{':
+                depth += 1
+            elif char == '}':
+                depth -= 1
+                if depth == 0:
+                    return text[start:idx + 1]
+        return text[start:]
+
+    def _save_snapshot(self, context: Dict[str, Any], content: str, model: Type[T], suffix: str) -> None:
+        run_id = context.get("run_id")
+        if not run_id:
+            return
+        stage = context.get("stage", "model")
+        name = context.get("name") or context.get("entity") or model.__name__.lower()
+        filename = f"{stage}/{name}{suffix}.txt"
+        snapshot_manager.write_text(run_id, filename, content)
 
     # ------------------------------------------------------------------
     # 模型调用
@@ -300,141 +374,99 @@ class AIModelClient:
         if isinstance(reasoning, str):
             data["reasoning"] = reasoning.strip()
         return data
-    def _match_theme(raw: str) -> StyleTheme:
-        value = raw.lower()
-        if value in StyleTheme._value2member_map_:
-            return StyleTheme(value)
-        keywords = {
-            StyleTheme.PROFESSIONAL: ["专业", "business", "corporate"],
-            StyleTheme.MODERN: ["科技", "tech", "modern", "future"],
-            StyleTheme.CREATIVE: ["创意", "creative", "design"],
-            StyleTheme.ACADEMIC: ["学术", "research", "academic"],
-            StyleTheme.MINIMAL: ["极简", "minimal", "simple"],
-        }
-        for theme, hints in keywords.items():
-            if any(hint in value for hint in hints):
-                return theme
-        return StyleTheme.PROFESSIONAL
 
     @staticmethod
-    def _parse_json(text: str, model: Type[T]) -> T:
-        if "```" in text:
-            pieces = text.split("```")
-            for piece in pieces:
-                piece = piece.strip()
-                if piece.startswith("json"):
-                    return model(**json.loads(piece[len("json"):].strip()))
-                if piece.startswith("{"):
-                    return model(**json.loads(piece))
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError as exc:
-            logger.error("解析模型输出失败: %s", exc)
-            raise
-
-        if model is OutlineResponse:
-            data = AIModelClient._normalize_outline_payload(data)
-        if model is StyleAnalysisResponse:
-            data = AIModelClient._normalize_style_payload(data)
-        if model is QualityAssessmentResponse:
-            data = AIModelClient._normalize_quality_payload(data)
-        return model(**data)
-
-
-
-
-@staticmethod
-def _normalize_quality_payload(data: Dict[str, Any]) -> Dict[str, Any]:
-    def _extract_score(payload: Any) -> Optional[float]:
-        if isinstance(payload, (int, float)):
-            return float(payload)
-        if isinstance(payload, str):
-            digits = re.findall(r"[-+]?[0-9]*\.?[0-9]+", payload)
-            if digits:
-                try:
-                    return float(digits[0])
-                except ValueError:
-                    return None
-            return None
-        if isinstance(payload, dict):
-            for key in ("score", "value", "rating", "overall", "total"):
-                if key in payload and payload[key] is not None:
+    def _normalize_quality_payload(data: Dict[str, Any]) -> Dict[str, Any]:
+        def _extract_score(payload: Any) -> Optional[float]:
+            if isinstance(payload, (int, float)):
+                return float(payload)
+            if isinstance(payload, str):
+                digits = re.findall(r"[-+]?[0-9]*\.?[0-9]+", payload)
+                if digits:
                     try:
-                        return float(payload[key])
-                    except (TypeError, ValueError):
-                        continue
-        return None
+                        return float(digits[0])
+                    except ValueError:
+                        return None
+                return None
+            if isinstance(payload, dict):
+                for key in ("score", "value", "rating", "overall", "total"):
+                    if key in payload and payload[key] is not None:
+                        try:
+                            return float(payload[key])
+                        except (TypeError, ValueError):
+                            continue
+            return None
 
-    assessment = data.get("assessment")
-    if isinstance(assessment, dict):
-        for key, value in assessment.items():
-            score = _extract_score(value)
+        assessment = data.get("assessment")
+        if isinstance(assessment, dict):
+            for key, value in assessment.items():
+                score = _extract_score(value)
+                if score is not None:
+                    data[key] = score
+
+        dimensions = {
+            "logic": "logic_score",
+            "logical": "logic_score",
+            "logic_dimension": "logic_score",
+            "relevance": "relevance_score",
+            "content": "relevance_score",
+            "language": "language_score",
+            "communication": "language_score",
+            "style": "layout_score",
+            "layout": "layout_score",
+            "visual": "layout_score",
+        }
+        for source, target in dimensions.items():
+            if isinstance(data.get(target), (int, float)):
+                continue
+            entry = data.get(source)
+            score = _extract_score(entry)
             if score is not None:
-                data[key] = score
+                data[target] = score
 
-    dimensions = {
-        "logic": "logic_score",
-        "logical": "logic_score",
-        "logic_dimension": "logic_score",
-        "relevance": "relevance_score",
-        "content": "relevance_score",
-        "language": "language_score",
-        "communication": "language_score",
-        "style": "layout_score",
-        "layout": "layout_score",
-        "visual": "layout_score",
-    }
-    for source, target in dimensions.items():
-        if isinstance(data.get(target), (int, float)):
-            continue
-        entry = data.get(source)
-        score = _extract_score(entry)
-        if score is not None:
-            data[target] = score
+        if not isinstance(data.get("overall_score"), (int, float)):
+            overall_entry = (
+                data.get("overall")
+                or data.get("summary")
+                or data.get("overall_assessment")
+                or (assessment.get("overall") if isinstance(assessment, dict) else None)
+            )
+            score = _extract_score(overall_entry)
+            if score is None:
+                collected = [
+                    data.get("logic_score"),
+                    data.get("relevance_score"),
+                    data.get("language_score"),
+                    data.get("layout_score"),
+                ]
+                collected = [value for value in collected if isinstance(value, (int, float))]
+                if collected:
+                    score = sum(collected) / len(collected)
+            if score is not None:
+                data["overall_score"] = score
 
-    if not isinstance(data.get("overall_score"), (int, float)):
-        overall_entry = (
-            data.get("overall")
-            or data.get("summary")
-            or data.get("overall_assessment")
-            or (assessment.get("overall") if isinstance(assessment, dict) else None)
-        )
-        score = _extract_score(overall_entry)
-        if score is None:
-            collected = [
-                data.get("logic_score"),
-                data.get("relevance_score"),
-                data.get("language_score"),
-                data.get("layout_score"),
-            ]
-            collected = [value for value in collected if isinstance(value, (int, float))]
-            if collected:
-                score = sum(collected) / len(collected)
-        if score is not None:
-            data["overall_score"] = score
-
-    if "pass_threshold" not in data:
-        decision_keys = ("pass", "passed", "is_pass", "pass_threshold")
-        decided = False
-        for key in decision_keys:
-            if key in data:
-                value = data[key]
-                if isinstance(value, bool):
-                    data["pass_threshold"] = value
-                    decided = True
-                    break
-                if isinstance(value, str):
-                    lowered = value.strip().lower()
-                    if lowered in {"true", "pass", "yes", "通过"}:
-                        data["pass_threshold"] = True
+        if "pass_threshold" not in data:
+            decision_keys = ("pass", "passed", "is_pass", "pass_threshold")
+            decided = False
+            for key in decision_keys:
+                if key in data:
+                    value = data[key]
+                    if isinstance(value, bool):
+                        data["pass_threshold"] = value
                         decided = True
                         break
-                    if lowered in {"false", "fail", "no", "未通过"}:
-                        data["pass_threshold"] = False
-                        decided = True
-                        break
-        if not decided and isinstance(data.get("overall_score"), (int, float)):
-            data["pass_threshold"] = data["overall_score"] >= 85
+                    if isinstance(value, str):
+                        lowered = value.strip().lower()
+                        if lowered in {"true", "pass", "yes", "通过"}:
+                            data["pass_threshold"] = True
+                            decided = True
+                            break
+                        if lowered in {"false", "fail", "no", "未通过"}:
+                            data["pass_threshold"] = False
+                            decided = True
+                            break
+            if not decided and isinstance(data.get("overall_score"), (int, float)):
+                data["pass_threshold"] = data["overall_score"] >= 85
 
         if "strengths" not in data:
             highlights = data.get("highlights") or data.get("advantages")
@@ -453,139 +485,35 @@ def _normalize_quality_payload(data: Dict[str, Any]) -> Dict[str, Any]:
             elif isinstance(advice, list):
                 data["suggestions"] = [str(item).strip() for item in advice if str(item).strip()]
 
-    return data
+        return data
 
+    def _match_theme(raw: str) -> StyleTheme:
+        value = raw.lower()
+        if value in StyleTheme._value2member_map_:
+            return StyleTheme(value)
+        keywords = {
+            StyleTheme.PROFESSIONAL: ["专业", "business", "corporate"],
+            StyleTheme.MODERN: ["科技", "tech", "modern", "future"],
+            StyleTheme.CREATIVE: ["创意", "creative", "design"],
+            StyleTheme.ACADEMIC: ["学术", "research", "academic"],
+            StyleTheme.MINIMAL: ["极简", "minimal", "simple"],
+        }
+        for theme, hints in keywords.items():
+            if any(hint in value for hint in hints):
+                return theme
+        return StyleTheme.PROFESSIONAL
 
+    @staticmethod
+    def _parse_json(text: str, model: Type[T], *, context: Optional[Dict[str, Any]] = None) -> T:
+        cleaned = AIModelClient._extract_json_block(text)
+        data = json.loads(cleaned)
 
-
-    def _stub_response(self, prompt: str, model: Type[T]) -> T:
         if model is OutlineResponse:
-            return self._stub_outline(prompt)  # type: ignore[return-value]
-        if model is SlideResponse:
-            return self._stub_slide(prompt)  # type: ignore[return-value]
+            data = AIModelClient._normalize_outline_payload(data)
         if model is StyleAnalysisResponse:
-            return self._stub_style(prompt)  # type: ignore[return-value]
+            data = AIModelClient._normalize_style_payload(data)
         if model is QualityAssessmentResponse:
-            return self._stub_quality(prompt)  # type: ignore[return-value]
-        if model is ConsistencyAnalysisResponse:
-            return self._stub_consistency(prompt)  # type: ignore[return-value]
-        raise ValueError(f"未实现的 stub 响应: {model.__name__}")
+            data = AIModelClient._normalize_quality_payload(data)
 
-    def _stub_outline(self, text: str) -> OutlineResponse:
-        paragraphs = text_tools.segment_paragraphs(text)
-        sections = []
-        templates = [
-            "standard_single_column",
-            "standard_dual_column",
-            "text_with_chart",
-            "text_with_table",
-        ]
-        for idx, para in enumerate(paragraphs[:5], 1):
-            key_points = []
-            for point_idx, item in enumerate(text_tools.extract_key_points(para, 4), 1):
-                key_points.append(
-                    {
-                        "point": item,
-                        "template_suggestion": templates[point_idx % len(templates)],
-                    }
-                )
-            sections.append(
-                {
-                    "section_id": idx,
-                    "title": text_tools.derive_section_title(para, f"章节 {idx}"),
-                    "summary": text_tools.summarise_text(para, 2),
-                    "key_points": key_points or [
-                        {"point": text_tools.summarise_text(para, 1), "template_suggestion": "simple_content"}
-                    ],
-                    "estimated_slides": max(1, len(para) // 400 + 1),
-                }
-            )
-        return OutlineResponse(
-            title=text_tools.derive_title(text),
-            sections=sections or [
-                {
-                    "section_id": 1,
-                    "title": "核心内容",
-                    "summary": "请补充更多信息",
-                    "key_points": [
-                        {"point": "目标与背景", "template_suggestion": "standard_single_column"}
-                    ],
-                    "estimated_slides": 2,
-                }
-            ],
-        )
+        return model(**data)
 
-
-    def _stub_slide(self, prompt: str) -> SlideResponse:
-        outline = text_tools.extract_key_points(prompt, 4)
-        title = outline[0] if outline else text_tools.derive_title(prompt)[:50]
-        bullet_list = outline[1:] or ["关键要点一", "关键要点二"]
-        bullets_html = ''.join(f"<li>{item}</li>" for item in bullet_list[:4])
-        slide_html = textwrap.dedent(
-            f"""
-            <div class="slide-content">
-              <div class="page-header"><h2>{title}</h2></div>
-              <div class="content-grid grid-1-cols">
-                <div class="card">
-                  <ul>{bullets_html}</ul>
-                </div>
-              </div>
-            </div>
-            """
-        ).strip()
-        return SlideResponse(
-            slide_html=slide_html,
-            charts=[],
-            speaker_notes="围绕要点展开说明，强调亮点与行动建议。",
-            page_title=title,
-            slide_type="content",
-            layout_template="standard_single_column",
-            template_suggestion="standard_single_column",
-        )
-
-
-    def _stub_style(self, prompt: str) -> StyleAnalysisResponse:
-        return StyleAnalysisResponse(
-            recommended_theme=StyleTheme.PROFESSIONAL,
-            color_palette={
-                "primary": "#1F2937",
-                "background": "#F9FAFB",
-                "text": "#111827",
-                "text_muted": "#6B7280",
-                "accent": "#2563EB",
-                "on_primary": "#FFFFFF",
-                "border": "#D1D5DB",
-            },
-            chart_colors=["#2563EB", "#16A34A", "#F59E0B", "#F97316"],
-            font_pairing={"title": "Roboto", "body": "Noto Sans"},
-            layout_preference="balanced",
-            reasoning="基于默认专业主题配色和字体，确保可读性与商业观感。",
-        )
-
-
-    def _stub_quality(self, prompt: str) -> QualityAssessmentResponse:
-        base = 82.0
-        if "summary" in prompt.lower():
-            base = 88.0
-        return QualityAssessmentResponse(
-            overall_score=base,
-            logic_score=base - 2,
-            relevance_score=base + 1,
-            language_score=base,
-            layout_score=max(75.0, base - 5),
-            strengths=["结构清晰", "要点突出"],
-            weaknesses=["需要更多数据支撑"],
-            suggestions=["补充具体案例", "增加视觉元素"],
-            pass_threshold=base >= 85,
-        )
-
-    def _stub_consistency(self, prompt: str) -> ConsistencyAnalysisResponse:
-        return ConsistencyAnalysisResponse(
-            overall_score=90.0,
-            issues=[],
-            strengths=["术语使用一致", "章节过渡自然"],
-            recommendations=["可增加结论页行动项"],
-        )
-
-
-__all__ = ["AIModelClient", "AIConfig"]

@@ -18,16 +18,48 @@ _QUALITY_SYSTEM_PROMPT = """
 """
 
 _QUALITY_USER_PROMPT_TEMPLATE = """
-请评估以下幻灯片：
+您是一位严格、专业的演示文稿质量评估专家。您的任务是分析单页幻灯片的各项信息，并给出量化评估和改进建议。
 
-**演示信息**
-- 标题：{title}
+**指令:**
+1.  **全面分析**: 基于下方提供的幻灯片“元信息”、“HTML结构”和“讲者备注”等全部内容，进行综合评估。
+2.  **维度评分 (0-100分)**:
+    * `logic_score`: 逻辑连贯性，内容组织是否有条理，与上下文是否衔接。
+    * `relevance_score`: 内容相关性，是否紧扣核心要点，信息密度是否恰当。
+    * `language_score`: 语言表达，文案是否清晰、专业、有吸引力。
+    * `layout_score`: 版式与信息设计，布局是否美观，是否有效传达信息。
+3.  **给出总分**:
+    * `overall_score`: 综合总分，根据各维度表现给出最终分数。
+4.  **决策是否通过**:
+    * `pass_threshold`: 基于 `overall_score` 判断是否通过质量阈值（通常为85分）。
+5.  **总结优缺点与建议**:
+    * `strengths`: 明确列出该幻灯片值得称赞的优点 (1-3条)。
+    * `weaknesses`: 明确指出该幻灯片存在的具体缺陷 (1-3条)。
+    * `suggestions`: 针对每条缺陷，提出具体、可执行的改进建议 (1-3条)。
+6.  **严格格式化输出**: 您的唯一合法输出就是一个严格遵循以下定义的扁平化 JSON 对象。
+
+**输出 JSON 格式定义**:
+- **重要规则**: 如果 JSON 字符串的值中包含双引号（"），您必须使用反斜杠进行转义（\\"）。
+```json
+{{
+  "overall_score": "float // 综合总分 (0-100)",
+  "logic_score": "float // 逻辑维度得分",
+  "relevance_score": "float // 相关性维度得分",
+  "language_score": "float // 语言维度得分",
+  "layout_score": "float // 版式维度得分",
+  "pass_threshold": "boolean // 是否达到质量标准 (true/false)",
+  "strengths": "array[string] // 优点列表",
+  "weaknesses": "array[string] // 缺点列表",
+  "suggestions": "array[string] // 改进建议列表"
+}}
+
+**待评估的幻灯片信息**
+- 演示主题：{title}
 - 目标受众：{audience}
 - 幻灯片编号：{slide_id}
 - 所属章节：{section_title}
 - 核心要点：{key_point}
 
-**当前幻灯片 HTML 结构**
+**HTML 结构**
 ```
 {slide_html}
 ```
@@ -41,7 +73,6 @@ _QUALITY_USER_PROMPT_TEMPLATE = """
 **上下文摘要（供参考）**
 {context}
 
-请从逻辑连贯性、内容相关性、语言表达与版式信息表达四个维度进行评分（0-100），同时指出优点、缺陷和改进建议。输出必须为 JSON。
 """
 
 
@@ -73,7 +104,8 @@ class QualityEvaluator:
         )
         snapshot_manager.write_text(state.run_id, f"04_quality/slide_{slide.slide_id:02d}_prompt", prompt)
 
-        response = self.client.structured_completion(prompt, QualityAssessmentResponse, system=_QUALITY_SYSTEM_PROMPT)
+        context = {"run_id": state.run_id, "stage": "04_quality", "name": f"slide_{slide.slide_id:02d}"}
+        response = self.client.structured_completion(prompt, QualityAssessmentResponse, system=_QUALITY_SYSTEM_PROMPT, context=context)
         snapshot_manager.write_json(state.run_id, f"04_quality/slide_{slide.slide_id:02d}_response", response.model_dump())
         score = QualityScore(
             total_score=response.overall_score,

@@ -16,16 +16,7 @@ _CONSISTENCY_SYSTEM = """
 """
 
 _CONSISTENCY_PROMPT_TEMPLATE = """
-您是一位演示文稿一致性审查专家。您的任务是分析整个幻灯片列表，识别其中的不一致问题。
-
-**演示信息:**
-* **主题**: {title}
-* **幻灯片总数**: {count}
-
-**幻灯片列表概览:**
----
-{slides}
----
+您是一位经验丰富的演示文稿一致性审查专家。您的任务是分析整个幻灯片列表，识别其中的不一致问题，并提供评估报告。
 
 **指令:**
 1.  **全面分析**: 检查所有幻灯片之间的逻辑连贯性、术语统一性、风格一致性等。
@@ -33,31 +24,35 @@ _CONSISTENCY_PROMPT_TEMPLATE = """
 3.  **识别问题**:
     * 找出具体的不一致问题，并为每个问题创建一个 `issue` 对象。
     * 每个 `issue` 必须包含问题类型 (`type`)、严重程度 (`severity`)、涉及的幻灯片ID (`slide_ids`)、问题描述 (`description`) 和改进建议 (`suggestion`)。
-4.  **总结反馈**: 总结整体的优点 (`strengths`) 和改进建议 (`recommendations`)。
-5.  **格式化输出**: 严格按照下面定义的 JSON 格式输出。
+4.  **总结反馈**: 总结整体的优点 (`strengths`) 和整体改进建议 (`recommendations`)。
+5.  **严格格式化输出**: 您的唯一合法输出就是一个严格遵循以下定义的扁平化 JSON 对象。
 
-**输出 JSON 格式:**
+**输出 JSON 格式定义**:
+- **重要规则**: 如果 JSON 字符串的值中包含双引号（"），您必须使用反斜杠进行转义（\\"）。
 ```json
 {{
   "overall_score": "float // 整体一致性得分 (0-100)",
   "issues": [
     {{
-      "type": "string // 问题类型，从 [\"logical_break\", \"style_inconsistency\", \"terminology_mismatch\", \"redundant_content\", \"structure_violation\"] 中选择",
-      "severity": "string // 严重程度，从 [\"low\", \"medium\", \"high\", \"critical\"] 中选择",
-      "slide_ids": [
-        "integer // 相关的幻灯片ID"
-      ],
+      "type": "string // 问题类型，从 [\\"logical_break\\", \\"style_inconsistency\\", \\"terminology_mismatch\\", \\"redundant_content\\", \\"structure_violation\\"] 中选择",
+      "severity": "string // 严重程度，从 [\\"low\\", \\"medium\\", \\"high\\", \\"critical\\"] 中选择",
+      "slide_ids": "array[integer] // 相关的幻灯片ID列表",
       "description": "string // 对问题的具体描述",
       "suggestion": "string // 具体的改进建议"
     }}
   ],
-  "strengths": [
-    "string // 一致性方面的优点"
-  ],
-  "recommendations": [
-    "string // 整体改进建议"
-  ]
+  "strengths": "array[string] // 一致性方面的优点列表",
+  "recommendations": "array[string] // 整体改进建议列表"
 }}
+
+**待分析的演示文稿信息:**
+* **主题**: {title}
+* **幻灯片总数**: {count}
+
+**幻灯片列表概览:**
+---
+{slides}
+---
 """
 
 
@@ -74,7 +69,8 @@ class ConsistencyChecker:
             slides=self._format_slides(state.slides),
         )
         snapshot_manager.write_text(state.run_id, "04_consistency/prompt", prompt)
-        response = self.client.structured_completion(prompt, ConsistencyAnalysisResponse, system=_CONSISTENCY_SYSTEM)
+        context = {"run_id": state.run_id, "stage": "04_consistency", "name": "consistency"}
+        response = self.client.structured_completion(prompt, ConsistencyAnalysisResponse, system=_CONSISTENCY_SYSTEM, context=context)
         snapshot_manager.write_json(state.run_id, "04_consistency/response", response.model_dump())
         report = ConsistencyReport(
             overall_score=response.overall_score,
