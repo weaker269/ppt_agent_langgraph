@@ -130,6 +130,15 @@ class AIModelClient:
                     return text[start:idx + 1]
         return text[start:]
 
+    @staticmethod
+    def _strip_js_functions(text: str) -> str:
+        pattern = re.compile(r'("[-_a-zA-Z0-9]+"\s*:\s*)function\s*\([^)]*\)\s*\{.*?\}', re.DOTALL)
+
+        def _replace(match):
+            return f"{match.group(1)}null"
+
+        return pattern.sub(_replace, text)
+
     def _save_snapshot(self, context: Dict[str, Any], content: str, model: Type[T], suffix: str) -> None:
         run_id = context.get("run_id")
         if not run_id:
@@ -487,6 +496,101 @@ class AIModelClient:
 
         return data
 
+    @staticmethod
+    def _normalize_slide_payload(data: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(data, dict):
+            return {"slide_html": ""}
+
+        html_candidates = (
+            data.get("slide_html"),
+            data.get("slideHtml"),
+            data.get("html"),
+            data.get("content"),
+            data.get("body"),
+        )
+        for candidate in html_candidates:
+            if isinstance(candidate, str) and candidate.strip():
+                data["slide_html"] = candidate.strip()
+                break
+
+        speaker = data.get("speaker_notes") or data.get("speakerNotes") or data.get("notes")
+        if isinstance(speaker, str):
+            data["speaker_notes"] = speaker.strip()
+        elif speaker is None:
+            data["speaker_notes"] = ""
+
+        title_candidate = data.get("page_title") or data.get("title") or data.get("pageTitle")
+        if isinstance(title_candidate, str):
+            data["page_title"] = title_candidate.strip()
+
+        layout_candidate = data.get("layout_template") or data.get("layoutTemplate") or data.get("layout")
+        if isinstance(layout_candidate, str):
+            data["layout_template"] = layout_candidate.strip()
+
+        suggestion_candidate = data.get("template_suggestion") or data.get("templateSuggestion")
+        if isinstance(suggestion_candidate, str):
+            data["template_suggestion"] = suggestion_candidate.strip()
+
+        charts = data.get("charts")
+        if isinstance(charts, dict):
+            charts_iterable = [charts]
+        elif isinstance(charts, list):
+            charts_iterable = charts
+        else:
+            charts_iterable = []
+
+        normalised_charts = []
+        for chart in charts_iterable:
+            if not isinstance(chart, dict):
+                continue
+            element = (
+                chart.get("elementId")
+                or chart.get("element_id")
+                or chart.get("id")
+                or chart.get("chartId")
+                or chart.get("chart_id")
+            )
+            if isinstance(element, str) and element.strip():
+                chart["elementId"] = element.strip()
+            elif element is not None:
+                chart["elementId"] = str(element)
+
+            options = chart.get("options") if "options" in chart else chart.get("option")
+            if isinstance(options, dict):
+                chart["options"] = options
+            elif isinstance(options, str):
+                try:
+                    chart["options"] = json.loads(options)
+                except Exception:
+                    chart["options"] = {}
+            if "options" not in chart:
+                chart["options"] = {}
+
+            for extra in ("element_id", "id", "chartId", "chart_id", "option"):
+                chart.pop(extra, None)
+
+            if chart.get("elementId"):
+                normalised_charts.append(chart)
+
+        data["charts"] = normalised_charts
+
+        if not isinstance(data.get("slide_html"), str) or len(data["slide_html"].strip()) < 20:
+            data["slide_html"] = (
+                '<div class="slide-content">'
+                '<div class="page-header"><h2>占位幻灯片</h2></div>'
+                '<div class="content-grid grid-1-cols">'
+                '<div class="card"><p>内容生成出现异常，当前为占位结果。</p></div>'
+                '</div>'
+                '</div>'
+            )
+        if "page_title" not in data or not isinstance(data["page_title"], str) or not data["page_title"].strip():
+            data["page_title"] = "占位幻灯片"
+        if "layout_template" not in data or not isinstance(data["layout_template"], str):
+            data["layout_template"] = "standard_single_column"
+        if "template_suggestion" not in data or not isinstance(data["template_suggestion"], str):
+            data["template_suggestion"] = "simple_content"
+        return data
+
     def _match_theme(raw: str) -> StyleTheme:
         value = raw.lower()
         if value in StyleTheme._value2member_map_:
@@ -506,6 +610,7 @@ class AIModelClient:
     @staticmethod
     def _parse_json(text: str, model: Type[T], *, context: Optional[Dict[str, Any]] = None) -> T:
         cleaned = AIModelClient._extract_json_block(text)
+        cleaned = AIModelClient._strip_js_functions(cleaned)
         data = json.loads(cleaned)
 
         if model is OutlineResponse:
@@ -514,6 +619,87 @@ class AIModelClient:
             data = AIModelClient._normalize_style_payload(data)
         if model is QualityAssessmentResponse:
             data = AIModelClient._normalize_quality_payload(data)
+        if model is SlideResponse:
+            data = AIModelClient._normalize_slide_payload(data)
 
         return model(**data)
+
+    def _stub_response(self, prompt: str, model: Type[T]) -> T:
+        """为断网/调试场景提供结构化占位结果。"""
+
+        if model is SlideResponse:
+            payload = {
+                "slide_html": (
+                    '<div class="slide-content">'
+                    '<div class="page-header"><h2>占位幻灯片</h2></div>'
+                    '<div class="content-grid grid-1-cols">'
+                    '<div class="card"><p>当前处于 stub 模式，未调用真实模型。</p></div>'
+                    '</div>'
+                    '</div>'
+                ),
+                "charts": [],
+                "speaker_notes": "占位提示：请连接真实模型以生成最终内容。",
+                "page_title": "占位幻灯片",
+                "layout_template": "standard_single_column",
+                "template_suggestion": "simple_content",
+            }
+        elif model is OutlineResponse:
+            payload = {
+                "title": "占位演示文稿",
+                "subtitle": "离线模式草稿",
+                "target_audience": "内部评审",
+                "estimated_duration": 15,
+                "sections": [
+                    {
+                        "section_id": 1,
+                        "title": "占位章节",
+                        "summary": "用于 stub 模式的默认章节。",
+                        "key_points": [
+                            {"point": "占位要点一"},
+                            {"point": "占位要点二"}
+                        ],
+                        "estimated_slides": 2,
+                    }
+                ],
+            }
+        elif model is StyleAnalysisResponse:
+            payload = {
+                "recommended_theme": StyleTheme.PROFESSIONAL,
+                "color_palette": {
+                    "primary": "#0D47A1",
+                    "on_primary": "#FFFFFF",
+                    "background": "#F5F7FA",
+                    "text": "#1E293B",
+                    "text_muted": "#64748B",
+                    "border": "#E2E8F0",
+                    "accent": "#F97316",
+                },
+                "chart_colors": ["#0D47A1", "#F97316", "#16A34A", "#5A67D8"],
+                "font_pairing": {"title": "Source Han Sans CN", "body": "Source Han Sans CN"},
+                "layout_preference": "balanced",
+                "reasoning": "占位样式：stub 模式下提供的默认专业方案。",
+            }
+        elif model is QualityAssessmentResponse:
+            payload = {
+                "overall_score": 90.0,
+                "logic_score": 90.0,
+                "relevance_score": 90.0,
+                "language_score": 90.0,
+                "layout_score": 90.0,
+                "strengths": ["结构完整", "语言流畅"],
+                "weaknesses": ["占位结果，仅供内部调试"],
+                "suggestions": ["连接真实模型以获取正式评审结果。"],
+                "pass_threshold": True,
+            }
+        elif model is ConsistencyAnalysisResponse:
+            payload = {
+                "overall_score": 85.0,
+                "issues": [],
+                "strengths": ["占位结果"],
+                "recommendations": ["启用真实模型进行一致性检测。"],
+            }
+        else:
+            raise ValueError(f"No stub available for model: {model.__name__}")
+
+        return model(**payload)
 

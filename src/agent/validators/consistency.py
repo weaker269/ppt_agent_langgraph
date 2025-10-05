@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from typing import Dict, Iterable, List
 
@@ -9,7 +10,7 @@ from ..ai_client import AIModelClient
 from ..domain import ConsistencyIssue, ConsistencyIssueType, ConsistencyReport, SlideContent
 from ..models import ConsistencyAnalysisResponse
 from ..state import OverallState
-from ..utils import logger, snapshot_manager
+from ..utils import logger, snapshot_manager, text_tools
 
 _CONSISTENCY_SYSTEM = """
 你是一位演示文稿一致性审查专家，需要指出逻辑断裂、术语不一致、风格冲突等问题。
@@ -84,10 +85,20 @@ class ConsistencyChecker:
 
     @staticmethod
     def _format_slides(slides: Iterable[SlideContent]) -> str:
-        lines = []
+        lines: List[str] = []
         for slide in slides:
-            lines.append(f"- 第{slide.slide_id}页《{slide.title}》: {slide.body[:120]} | 要点: {', '.join(slide.bullet_points[:3])}")
+            title = slide.page_title or slide.key_point or slide.section_title or f"幻灯片 {slide.slide_id}"
+            notes = slide.speaker_notes or ""
+            if not notes:
+                notes = ConsistencyChecker._strip_html(slide.slide_html)
+            summary = text_tools.summarise_text(notes, 1) if notes else ""
+            lines.append(f"- 第{slide.slide_id}页《{title}》: {summary}")
         return "\n".join(lines)
+
+    @staticmethod
+    def _strip_html(html: str) -> str:
+        clean = re.sub(r"<[^>]+>", " ", html)
+        return " ".join(clean.split())[:160]
 
     @staticmethod
     def _convert_issue(raw: Dict) -> ConsistencyIssue:

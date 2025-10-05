@@ -16,6 +16,15 @@ from ..utils import ensure_directory, logger
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
 ensure_directory(_TEMPLATE_DIR)
 
+_DEFAULT_FONT_STACK = [
+    "Source Han Sans SC",
+    "Noto Sans SC",
+    "Microsoft YaHei",
+    "PingFang SC",
+    "Heiti SC",
+    "sans-serif",
+]
+
 _BASE_TEMPLATE = """<!DOCTYPE html>
 <html lang="zh">
   <head>
@@ -29,7 +38,7 @@ _BASE_TEMPLATE = """<!DOCTYPE html>
       body {
         background: {{ palette.background }};
         color: {{ palette.text }};
-        font-family: {{ fonts.body }}, sans-serif;
+        font-family: {{ fonts.body }};
         margin: 0;
         overflow: hidden;
       }
@@ -43,7 +52,7 @@ _BASE_TEMPLATE = """<!DOCTYPE html>
       }
       header h1 {
         margin: 0;
-        font-family: {{ fonts.title }}, sans-serif;
+        font-family: {{ fonts.title }};
         font-size: 1.8rem;
       }
       header p {
@@ -89,12 +98,12 @@ _BASE_TEMPLATE = """<!DOCTYPE html>
       }
       .slide-transition h1, .slide-transition h2 {
         margin: 0 0 12px;
-        font-family: {{ fonts.title }}, sans-serif;
+        font-family: {{ fonts.title }};
       }
       .page-header h2 {
         margin: 0 0 16px;
         font-size: 1.6rem;
-        font-family: {{ fonts.title }}, sans-serif;
+        font-family: {{ fonts.title }};
         color: {{ palette.primary }};
       }
       .content-grid {
@@ -115,7 +124,7 @@ _BASE_TEMPLATE = """<!DOCTYPE html>
       }
       .card h3 {
         margin-top: 0;
-        font-family: {{ fonts.title }}, sans-serif;
+        font-family: {{ fonts.title }};
         color: {{ palette.primary }};
       }
       ul {
@@ -327,8 +336,8 @@ class HTMLRenderer:
         base_profile = state.selected_style or StyleProfile(theme=StyleTheme.PROFESSIONAL)
         palette = self._build_palette(base_profile)
         fonts = {
-            "title": base_profile.font_pairing.get("title", "Roboto"),
-            "body": base_profile.font_pairing.get("body", "Source Sans"),
+            "title": self._format_font_stack(base_profile.font_pairing.get("title")),
+            "body": self._format_font_stack(base_profile.font_pairing.get("body")),
         }
         slides_payload = [
             {
@@ -358,6 +367,46 @@ class HTMLRenderer:
         state.html_output = html
         logger.info("HTML 渲染完成")
         return state
+
+    @classmethod
+    def _format_font_stack(cls, font: str | None) -> str:
+        candidates: list[str] = []
+        if font:
+            parts = [part.strip().strip("'") for part in font.split(',') if part.strip()]
+            candidates.extend(parts)
+        candidates.extend(_DEFAULT_FONT_STACK)
+
+        generic_families = {
+            "serif",
+            "sans-serif",
+            "monospace",
+            "cursive",
+            "fantasy",
+            "system-ui",
+            "ui-serif",
+            "ui-sans-serif",
+            "ui-monospace",
+        }
+        seen: set[str] = set()
+        stack: list[str] = []
+
+        for name in candidates:
+            clean = name.strip().strip('"')
+            if not clean:
+                continue
+            key = clean.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            if key in generic_families:
+                stack.append(clean)
+                continue
+            needs_quotes = any(ch.isspace() for ch in clean) or any(ch in clean for ch in '.0123456789')
+            if needs_quotes:
+                stack.append(f'"{clean}"')
+            else:
+                stack.append(clean)
+        return ", ".join(stack)
 
     @staticmethod
     def _build_palette(style: StyleProfile) -> Dict[str, str]:
