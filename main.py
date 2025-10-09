@@ -41,7 +41,7 @@ def main() -> None:
     provider = (args.model_provider or default_provider).lower()
 
     if provider == "google":
-        default_model = env_settings.get("GOOGLE_MODEL", "gemini-pro")
+        default_model = env_settings.get("GOOGLE_MODEL", "gemini-2.5-pro")
     elif provider == "openai":
         default_model = env_settings.get("OPENAI_MODEL", "gpt-3.5-turbo")
     else:
