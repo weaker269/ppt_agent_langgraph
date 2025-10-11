@@ -1,19 +1,32 @@
-# Repository Guidelines
+# Repository Guidelines（仓库指引）
 
 ## 项目结构与模块组织
-main.py 负责 CLI 启动并调用 src/agent/graph.py 内的 PPTAgentGraph；src/agent 依角色分成 generators、renderers、evaluators、validators，domain.py 汇集模型定义，state.py 维护运行状态；tests、logs、results、prompts、docs 与 example_input.txt 分别承载测试、日志、成果、提示模板与样例资料。
+仓库以 `main.py` 为 CLI 入口，调用 `src/agent/graph.py` 构建 PPTAgentGraph；`src/agent` 按角色拆分 generators、renderers、evaluators、validators，`domain.py` 汇集 Pydantic 模型，`state.py` 管理运行态；业务素材放在 `prompts`、`docs`，执行结果落地 `results`，日志保存在 `logs`，自动化样例集中于 `example_input.txt`，测试资产统一归档于 `tests`。
 
 ## 构建、测试与开发命令
-环境准备顺序：python3 -m venv .venv → source .venv/bin/activate → pip install -r requirements.txt。常用命令：python main.py --text "示例主题" --model-provider stub --use-stub 进行快速试跑；python main.py --file docs/sample.txt 处理批量文本；pytest -q 或 pytest tests/test_workflow.py -k consistency 校验主流程；pytest -k retry 观察重试策略。
+首次进入建议执行：
+```bash
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+```
+快速试跑 `python main.py --text "演示主题" --model-provider stub --use-stub`；批量处理文本用 `python main.py --file docs/sample.txt`；执行回归 `pytest -q`，定位流程一致性运行 `pytest tests/test_workflow.py -k consistency`，观察重试逻辑执行 `pytest -k retry`。
 
-## 代码风格与命名约定
-遵循 PEP 8 与四空格缩进，函数及变量采用 snake_case，枚举常量使用 UPPER_CASE。全部 Pydantic 模型集中在 domain.py，公共逻辑置于 utils.py；调整提示语时同步维护 prompts 目录与生成器注释，提交前执行 ruff check 及 pytest 维持一致性。
+## 代码风格与命名规范
+遵循 PEP 8 与四空格缩进，函数与变量采用 snake_case，常量和枚举使用 UPPER_CASE；公共工具置于 `src/utils.py`，提示模板改动需同步更新 `prompts` 内文并补充中文注释；提交前务必运行 `ruff check` 与 `pytest` 以确认风格及行为稳定。
 
-## 测试规范
-测试框架为 pytest，文件命名遵循 test_*.py：tests/test_domain.py 覆盖模型，tests/test_workflow.py 验证端到端流程，tests/test_renderer.py 检查渲染，tests/test_style.py 确认样式策略。新增能力至少具备正向与边界用例，并断言质量得分、重试次数及反馈文本。
+## 测试指南
+统一使用 pytest，文件命名遵循 `test_*.py`；新增功能至少覆盖主路径与边界场景，断言质量评分、重试次数与输出文案；测试若依赖外部样例，请写入 `tests/fixtures` 并确保可重复执行。
 
 ## 提交与合并请求规范
-推荐使用动词前缀提交，如 feat: extend outline quality gates 或 fix: protect html theme assets。PR 描述应写明变更背景、核心改动、pytest -q 结果及必要的截图或结果路径（results/2024-xx-xx/*.html），若调整 CLI 参数、输出结构或公共模型，请同步更新 README.md 与 docs/QUICK_VALIDATION.md 并提示兼容性风险。
+推荐使用动词前缀提交信息，如 `feat: refine outline filter`；PR 需说明背景、核心改动、验证命令与关键输出（例如 `results/2024-xx-xx/*.html`），若涉及 CLI 参数或公共模型，请同步更新 README 与 `docs/QUICK_VALIDATION.md` 并标注兼容性风险。
 
-## 配置与安全提示
-默认运行离线；接入真实模型时仅通过环境变量或 .env 注入 GOOGLE_API_KEY、OPENAI_API_KEY，禁止写入仓库。日志位于 logs 目录，分享前应脱敏；部署生产环境时配置 rate limit、timeout 与 alert，并在 prompts 中记录提示变更便于回溯。
+## 安全与配置提示
+默认离线运行，密钥通过 `.env` 或环境变量注入，禁止写回仓库；真实模型上线前配置超时、速率与告警策略，分享日志须先脱敏；若检索或索引失败，请记录降级路径并在 `TODO.md` 内同步状态。
+
+## RAG 优化执行指引
+- 默认采用 **递归分块 + 语义检索 + 精排** 作为文档锚定主线，确保 PPT 生成引用原文证据。
+- 分块流程：章节 → 段落 → 句群，块长控制在 200~300 汉字并保留 1-2 句重叠；每个块需记录来源文件、偏移量等元数据，便于追溯。
+- 内容生成、质量评估、一致性检查共用同一批证据块与滑动摘要，禁止各自拼接不同上下文导致逻辑漂移。
+- 检索失败或索引不可用时必须触发降级策略并记录风险，严禁在无证据约束下让 LLM 自由扩写。
+- 详细任务拆分、进度与策略更新请参阅 TODO.md 并同步维护两份文档。
