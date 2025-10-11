@@ -15,7 +15,7 @@
 ### 一、文档锚定（方案二：层级分块 + 语义检索 RAG）
 
 #### 1.1 嵌入模型与索引选型
-- [ ] **目标**：确定中文嵌入模型、向量库与部署方式，为后续检索提供能力基线。  
+- [x] **目标**：确定中文嵌入模型、向量库与部署方式，为后续检索提供能力基线。  
 - **实现路径**：对比 `BAAI/bge-large-zh-v1.5`、`text2vec-base-chinese`、`m3e-base`；以 `sentence-transformers` 进行离线评估（余弦相似度 + Top-K 命中率）。  
 - **工具/依赖**：`sentence-transformers`、`faiss-cpu`、`rank-bm25`（用于关键词对照）。  
 - **产出**：  
@@ -23,9 +23,10 @@
   - 结论记录在 `docs/rag/embedding_selection.md`。  
 - **验收标准**：指定模型在测试语料上的 Top-5 召回率 ≥ 0.85，向量构建耗时满足批量场景（1000 chunk < 5s）。  
 - **完成记录**：
+  - 2025-10-11 @Codex 完成评测：新增 `scripts/eval_embeddings.py`、`docs/rag/embedding_eval_samples.jsonl`、`docs/rag/embedding_selection.md`，生成 `results/embedding_eval.json`；`text2vec-base-chinese` Top-5 召回率 1.0，`bge-large` Top-5 召回率 0.67，建议先以前者 + BM25 组合作为基线方案。
 
 #### 1.2 文档解析与递归分块实现
-- [ ] **目标**：生成统一的 `DocumentChunk` 数据结构，覆盖 Markdown、纯文本、PDF、Word。  
+- [x] **目标**：生成统一的 `DocumentChunk` 数据结构，覆盖 Markdown、纯文本、PDF、Word。  
 - **实现路径**：  
   - 新增 `src/rag/loaders.py`：封装 `markdown` / `plain text` / `pymupdf` / `python-docx` 解析。  
   - 新增 `src/rag/chunkers.py`：递归分割（章节→段落→句群），块长控制 200~300 汉字，重叠 1-2 句；截取时保留源文件名、章节标题、偏移量。  
@@ -36,6 +37,7 @@
   - 单元测试 `tests/rag/test_chunkers.py` 覆盖多格式输入。  
 - **验收标准**：随机抽取 10 篇文档，人工确认 chunk 语义完整度 ≥ 90%；单文档分块时延 < 1s/万字。  
 - **完成记录**：
+  - 2025-10-11 @Codex 新增 `src/rag/{models,loaders,chunkers}.py` 与 `tests/rag/test_chunkers.py`，实现 Markdown/纯文本/PDF/Docx 解析与递归分块，补充 PyMuPDF、python-docx 依赖；`pytest tests/rag/test_chunkers.py -q` 通过，验证多格式 chunk 长度与元数据正确。
 
 #### 1.3 索引构建与双阶段检索
 - [ ] **目标**：实现 BM25 + 向量召回，再用交叉编码器重排，输出 Top-N 证据块。  

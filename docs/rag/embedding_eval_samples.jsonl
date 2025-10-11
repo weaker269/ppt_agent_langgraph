@@ -1,0 +1,6 @@
+{"query": "云网融合的核心目标是什么？", "answer_substrings": ["云随网动、网随云动"], "corpus_hint": ["sample.md"]}
+{"query": "多模态大模型的关键组件包含哪些部分？", "answer_substrings": ["模态编码器", "输入投影器", "大型模型基座", "输出投影器", "模态生成器"], "corpus_hint": ["sample2.md"]}
+{"query": "多模态大模型相比传统单模态模型的优势是什么？", "answer_substrings": ["更强的泛化能力", "上下文感知能力"], "corpus_hint": ["sample2.md"]}
+{"query": "低代码平台的可视化开发界面带来怎样的影响？", "answer_substrings": ["显著降低对编程技能的依赖"], "corpus_hint": ["sample3.md"]}
+{"query": "低代码平台默认支持哪些终端部署？", "answer_substrings": ["支持Web、移动端、桌面端"], "corpus_hint": ["sample3.md"]}
+{"query": "云网融合的典型特征包含哪些方面？", "answer_substrings": ["智能化", "自服务化", "高速与低延迟", "灵活扩展"], "corpus_hint": ["sample.md"]}
