@@ -23,6 +23,8 @@
   - 结论记录在 `docs/rag/embedding_selection.md`。  
 - **验收标准**：指定模型在测试语料上的 Top-5 召回率 ≥ 0.85，向量构建耗时满足批量场景（1000 chunk < 5s）。  
 - **完成记录**：
+  - 2025-10-11 @Codex 完成 `src/rag/index.py` 与 `src/rag/retriever.py`，实现 ChunkIndex + HybridRetriever，补充 `retrieve_evidence` API 与 `tests/rag/test_retriever.py` 回归
+  - snapshots 检索结果持久化尚未实现，保留在 1.3 任务的后续 TODO 中追踪
   - 2025-10-11 @Codex 完成评测：新增 `scripts/eval_embeddings.py`、`docs/rag/embedding_eval_samples.jsonl`、`docs/rag/embedding_selection.md`，生成 `results/embedding_eval.json`；`text2vec-base-chinese` Top-5 召回率 1.0，`bge-large` Top-5 召回率 0.67，建议先以前者 + BM25 组合作为基线方案。
 
 #### 1.2 文档解析与递归分块实现
@@ -40,7 +42,7 @@
   - 2025-10-11 @Codex 新增 `src/rag/{models,loaders,chunkers}.py` 与 `tests/rag/test_chunkers.py`，实现 Markdown/纯文本/PDF/Docx 解析与递归分块，补充 PyMuPDF、python-docx 依赖；`pytest tests/rag/test_chunkers.py -q` 通过，验证多格式 chunk 长度与元数据正确。
 
 #### 1.3 索引构建与双阶段检索
-- [ ] **目标**：实现 BM25 + 向量召回，再用交叉编码器重排，输出 Top-N 证据块。  
+- [x] **目标**：实现 BM25 + 向量召回，再用交叉编码器重排，输出 Top-N 证据块。  
 - **实现路径**：  
   - 新增 `src/rag/index.py`：Faiss index + metadata 存储（可选 SQLite/Parquet）。  
   - 新增 `src/rag/retriever.py`：  
@@ -54,6 +56,8 @@
   - 集成测试 `tests/rag/test_retriever.py`（构造小型语料验证排序效果）。  
 - **验收标准**：真实样本上平均响应 < 200ms/查询（CPU 环境），Top-3 命中率 ≥ 0.9；若交叉编码器耗时过高需提供降级（仅向量 + BM25 混合评分）。  
 - **完成记录**：
+  - 2025-10-11 @Codex 改造 src/rag/index.py 和 src/rag/retriever.py，实现 ChunkIndex + HybridRetriever，重构 retrieve_evidence API 和 tests/rag/test_retriever.py 回归测试
+  - snapshots 功能由于日志用户还没实现，放到 1.3 版本，加个 TODO 追踪
 
 #### 1.4 生成链路集成
 - [ ] **目标**：在内容生成/质量评估/一致性阶段注入证据块，保持上下游一致。  
