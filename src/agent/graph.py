@@ -123,11 +123,59 @@ class PPTAgentGraph:
             state.record_warning(warning)
             return
 
-        builder = IndexBuilder(embedding_model, chunk_size=280, sentence_overlap=1)
+        # 检查是否启用索引缓存
+        cache_enabled = os.getenv("RAG_INDEX_CACHE_ENABLED", "true").lower() in ("true", "1", "yes")
+        cache_base_dir = Path(os.getenv("RAG_INDEX_CACHE_DIR", "cache/rag_index"))
+        
         clean_text = state.input_text.strip()
         if not clean_text:
             return
 
+        # 生成缓存键（基于输入文本的哈希）
+        import hashlib
+        cache_key = hashlib.md5(clean_text.encode("utf-8")).hexdigest()
+        cache_dir = cache_base_dir / cache_key
+
+        # 尝试从缓存加载索引
+        if cache_enabled and cache_dir.exists():
+            try:
+                from src.rag.index import ChunkIndex
+                index = ChunkIndex.load(cache_dir, embedding_model)
+                logger.info("从缓存加载 RAG 索引成功，chunk=%s，缓存路径=%s", len(index.chunks), cache_dir)
+                state.rag_index = index
+                
+                # 创建检索器
+                from src.rag.metrics import RetrievalMetricsLogger
+                from src.rag.retriever import HybridRetriever
+                metrics_logger = RetrievalMetricsLogger()
+                state.retriever = HybridRetriever(
+                    index,
+                    dense_top_k=20,
+                    bm25_top_k=30,
+                    alpha=0.6,
+                    metrics_logger=metrics_logger,
+                )
+                
+                snapshot_manager.write_json(
+                    state.run_id,
+                    "02_rag/index_stats",
+                    {
+                        "chunk_count": len(index.chunks),
+                        "embedding_model": getattr(index, "embedding_model_name", "unknown"),
+                        "bm25_vocabulary_size": len(index.bm25_tokens),
+                        "device": device,
+                        "loaded_from_cache": True,
+                        "cache_key": cache_key,
+                    },
+                )
+                return
+            except Exception as exc:
+                warning = f"从缓存加载索引失败: {exc}，将重新构建"
+                logger.warning(warning)
+                state.record_warning(warning)
+
+        # 构建新索引
+        builder = IndexBuilder(embedding_model, chunk_size=280, sentence_overlap=1)
         document = LoadedDocument(
             metadata=DocumentMetadata(
                 document_id=state.run_id,
@@ -155,6 +203,16 @@ class PPTAgentGraph:
             state.record_warning(warning)
             return
 
+        # 保存索引到缓存
+        if cache_enabled:
+            try:
+                index.save(cache_dir)
+                logger.info("RAG 索引已保存到缓存: %s", cache_dir)
+            except Exception as exc:
+                warning = f"保存索引到缓存失败: {exc}"
+                logger.warning(warning)
+                state.record_warning(warning)
+
         state.rag_index = index
         metrics_logger = RetrievalMetricsLogger()
         state.retriever = HybridRetriever(
@@ -172,6 +230,8 @@ class PPTAgentGraph:
                 "embedding_model": getattr(index, "embedding_model_name", "unknown"),
                 "bm25_vocabulary_size": len(index.bm25_tokens),
                 "device": device,
+                "loaded_from_cache": False,
+                "cache_key": cache_key if cache_enabled else None,
             },
         )
         logger.info("RAG 索引构建完成，chunk=%s，embedding=%s", len(index.chunks), getattr(index, "embedding_model_name", "unknown"))

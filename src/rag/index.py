@@ -63,6 +63,95 @@ class ChunkIndex:
             vector = vector.astype(np.float32)
         return vector.reshape(1, -1)
 
+    def save(self, cache_dir: Path) -> None:
+        """将索引持久化到磁盘。
+
+        Args:
+            cache_dir: 缓存目录路径，会在此目录下创建索引文件。
+        """
+        import json
+
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # 保存 Faiss 索引
+        faiss.write_index(self.faiss_index, str(cache_dir / "faiss.index"))
+
+        # 保存嵌入向量
+        np.save(cache_dir / "embeddings.npy", self.embeddings)
+
+        # 保存 chunks（Pydantic 序列化）
+        chunks_data = [chunk.model_dump() for chunk in self.chunks]
+        (cache_dir / "chunks.json").write_text(
+            json.dumps(chunks_data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        # 保存 BM25 tokens
+        (cache_dir / "bm25_tokens.json").write_text(
+            json.dumps(self.bm25_tokens, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        # 保存元数据
+        metadata = {
+            "embedding_model_name": self.embedding_model_name,
+            "chunk_count": len(self.chunks),
+            "embedding_dim": self.embeddings.shape[1],
+        }
+        (cache_dir / "metadata.json").write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    @classmethod
+    def load(cls, cache_dir: Path, embedding_model: EmbeddingModel) -> ChunkIndex:
+        """从磁盘加载索引。
+
+        Args:
+            cache_dir: 缓存目录路径。
+            embedding_model: 嵌入模型实例（用于后续查询编码）。
+
+        Returns:
+            重建的 ChunkIndex 实例。
+
+        Raises:
+            FileNotFoundError: 缓存文件不存在。
+            ValueError: 缓存数据损坏或不兼容。
+        """
+        import json
+
+        if not cache_dir.exists():
+            raise FileNotFoundError(f"缓存目录不存在: {cache_dir}")
+
+        # 加载元数据
+        metadata = json.loads((cache_dir / "metadata.json").read_text(encoding="utf-8"))
+
+        # 加载 Faiss 索引
+        faiss_index = faiss.read_index(str(cache_dir / "faiss.index"))
+
+        # 加载嵌入向量
+        embeddings = np.load(cache_dir / "embeddings.npy")
+
+        # 加载 chunks
+        chunks_data = json.loads((cache_dir / "chunks.json").read_text(encoding="utf-8"))
+        chunks = [DocumentChunk.model_validate(data) for data in chunks_data]
+
+        # 加载 BM25 tokens
+        bm25_tokens = json.loads((cache_dir / "bm25_tokens.json").read_text(encoding="utf-8"))
+
+        # 重建 BM25 索引
+        bm25 = BM25Okapi(bm25_tokens)
+
+        return cls(
+            chunks=chunks,
+            embeddings=embeddings,
+            bm25=bm25,
+            bm25_tokens=bm25_tokens,
+            faiss_index=faiss_index,
+            embedding_model=embedding_model,
+            embedding_model_name=metadata["embedding_model_name"],
+        )
+
 
 class IndexBuilder:
     """负责将文档加载、分块并构建索引。"""

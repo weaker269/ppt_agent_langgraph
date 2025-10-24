@@ -180,3 +180,25 @@
 - 完成 1.2 文档解析：新增 src/rag/chunkers.py、tests/rag/test_chunkers.py
 - 效果：对 sample.md / sample.pdf 分块后人工检查语义完整度 95%，平均耗时 0.6s/万字
 ```
+
+---
+
+### 五、性能优化与增强（可选）
+
+#### 5.1 交叉编码器重排实现
+- [ ] **目标**：在混合检索后引入交叉编码器重排，提升 Top-3 命中率至 0.90+。
+- **实现路径**：
+  - 在 `HybridRetriever` 中集成 `sentence-transformers` 的 CrossEncoder。
+  - 候选方案：`BAAI/bge-reranker-large` 或 `cross-encoder/ms-marco-MiniLM-L-6-v2`。
+  - 增加可选参数 `reranker_model: Optional[str]`，若提供则启用重排。
+  - 对初步召回的 Top-20 候选使用交叉编码器评分，重新排序后返回 Top-K。
+  - 增加超时保护：若重排耗时 > 500ms，降级为混合评分并记录 warning。
+- **工具/依赖**：`sentence-transformers`（已有）、`transformers`。
+- **产出**：
+  - 更新 `src/rag/retriever.py`：新增 `_rerank()` 方法。
+  - 配置选项：`RAG_RERANKER_MODEL`、`RAG_RERANKER_TIMEOUT`。
+  - 测试用例：`tests/rag/test_reranker.py` 验证重排效果。
+- **验收标准**：在评估语料上 Top-3 命中率提升 ≥ 5%；平均检索延迟增加 < 100ms（CPU）；超时降级机制有效。
+- **完成记录**：
+
+---
