@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
-from typing import Dict, List, Sequence, Tuple
+from typing import Callable, Dict, List, Optional
 
 import jieba  # type: ignore
 import numpy as np
 
 from .index import ChunkIndex
 from .models import DocumentChunk
+from .metrics import DegradationReason, RetrievalMetricsLogger
 
 
 @dataclass
@@ -33,6 +35,7 @@ class HybridRetriever:
         bm25_top_k: int = 20,
         alpha: float = 0.6,
         normalize_embeddings: bool = True,
+        metrics_logger: Optional[RetrievalMetricsLogger] = None,
     ) -> None:
         if not 0 <= alpha <= 1:
             raise ValueError("alpha 必须位于 [0, 1] 区间内。")
@@ -41,6 +44,7 @@ class HybridRetriever:
         self.bm25_top_k = bm25_top_k
         self.alpha = alpha
         self.normalize_embeddings = normalize_embeddings
+        self.metrics_logger = metrics_logger
 
     def retrieve(self, query: str, top_k: int = 5) -> List[RetrievedChunk]:
         if len(self.index) == 0:
@@ -52,6 +56,44 @@ class HybridRetriever:
 
         combined.sort(key=lambda item: item.score, reverse=True)
         return combined[:top_k]
+
+    def retrieve_with_metrics(
+        self,
+        query: str,
+        top_k: int = 5,
+        *,
+        match_fn: Optional[Callable[[RetrievedChunk], bool]] = None,
+        extra: Optional[Dict[str, object]] = None,
+    ) -> List[RetrievedChunk]:
+        """执行检索并将指标写入监控日志。"""
+
+        start = time.perf_counter()
+        results = self.retrieve(query, top_k=top_k)
+        latency_ms = (time.perf_counter() - start) * 1000
+
+        best_rank: Optional[int] = None
+        if match_fn is not None:
+            for rank, item in enumerate(results, start=1):
+                if match_fn(item):
+                    best_rank = rank
+                    break
+
+        degradation: Optional[DegradationReason] = None
+        if not results:
+            degradation = DegradationReason.EMPTY_RESULT
+
+        if self.metrics_logger is not None:
+            self.metrics_logger.record_query(
+                query=query,
+                latency_ms=latency_ms,
+                retrieved=len(results),
+                top_k=top_k,
+                total_chunks=len(self.index),
+                best_rank=best_rank,
+                degradation=degradation,
+                extra=extra,
+            )
+        return results
 
     def _dense_search(self, query: str) -> Dict[int, float]:
         query_vec = self.index.encode_query(query, normalize_embeddings=self.normalize_embeddings)

@@ -6,7 +6,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 LOGGER_NAME = "ppt_agent"
 
@@ -147,6 +147,24 @@ class _TextTools:
     def extract_key_points(self, text: str, max_points: int = 4) -> List[str]:
         sentences = self._split_sentences(text)
         return [sent.strip() for sent in sentences[:max_points] if sent.strip()]
+
+    def format_evidence(self, evidence_items: Iterable[Dict[str, Any]], *, bullet: bool = True) -> str:
+        items = list(evidence_items or [])
+        if not items:
+            return "(未检索到可靠证据，请谨慎陈述，避免臆造数据)"
+        lines: List[str] = []
+        for item in items:
+            evidence_id = item.get("evidence_id", "E0")
+            snippet = item.get("snippet", "")
+            source_path = item.get("source_path") or ""
+            section_title = item.get("section_title") or ""
+            source_name = Path(source_path).name if source_path else ""
+            segments = [seg for seg in [source_name, section_title] if seg]
+            source_desc = " / ".join(segments)
+            suffix = f" (来源: {source_desc})" if source_desc else ""
+            prefix = "- " if bullet else ""
+            lines.append(f"{prefix}[{evidence_id}] {snippet}{suffix}".strip())
+        return "\n".join(lines)
 
     @staticmethod
     def _split_sentences(text: str) -> List[str]:

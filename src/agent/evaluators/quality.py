@@ -10,7 +10,7 @@ from ..ai_client import AIModelClient
 from ..domain import QualityDimension, QualityFeedback, QualityScore, SlideContent
 from ..models import QualityAssessmentResponse
 from ..state import OverallState
-from ..utils import logger, snapshot_manager
+from ..utils import logger, snapshot_manager, text_tools
 
 _QUALITY_SYSTEM_PROMPT = """
 你是一位严格的演示文稿质量评估专家，需要从逻辑、相关性、语言和版式四个维度给出评分与改进建议。
@@ -67,6 +67,11 @@ _QUALITY_USER_PROMPT_TEMPLATE = """
 **图表配置**
 {charts}
 
+**证据检索 Query**: {evidence_query}
+
+**参考证据**
+{evidence_block}
+
 **讲者备注**
 {speaker_notes}
 
@@ -91,6 +96,9 @@ class QualityEvaluator:
     ) -> Tuple[QualityScore, List[QualityFeedback]]:
         outline = state.outline
         charts_dump = "无图表" if not slide.charts else json.dumps([chart.model_dump(by_alias=True) for chart in slide.charts], ensure_ascii=False, indent=2)
+        evidence_items = state.slide_evidence.get(slide.slide_id, [])
+        evidence_query = state.evidence_queries.get(slide.slide_id, "")
+        evidence_block = text_tools.format_evidence(evidence_items)
         prompt = _QUALITY_USER_PROMPT_TEMPLATE.format(
             title=outline.title if outline else "",
             audience=outline.target_audience if outline else "通用听众",
@@ -99,6 +107,8 @@ class QualityEvaluator:
             key_point=slide.key_point,
             slide_html=slide.slide_html,
             charts=charts_dump,
+            evidence_query=evidence_query or "",
+            evidence_block=evidence_block,
             speaker_notes=slide.speaker_notes or "(无)",
             context=self._format_context(context_slides),
         )

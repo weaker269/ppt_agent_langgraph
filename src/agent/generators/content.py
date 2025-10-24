@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import textwrap
 import time
 from typing import Any, Dict, Iterable, List, Tuple
@@ -45,6 +46,9 @@ _GENERATION_PROMPT_TEMPLATE = """
 * **所属章节**: {section_title}（{section_summary}）
 * **核心要点**: {key_point}
 * **大纲建议模板**: {template_suggestion}
+* **证据检索 Query**: {evidence_query}
+* **参考证据列表**:
+{evidence_block}
 * **上下文（最近幻灯片摘要）**:
 {context}
 
@@ -110,6 +114,9 @@ _REFLECTION_PROMPT_TEMPLATE = """
 **反馈摘要**:
 {feedback}
 
+**参考证据**:
+{evidence_block}
+
 **当前 HTML 结构**:
 {slide_html}
 
@@ -133,6 +140,10 @@ _REFLECTION_PROMPT_TEMPLATE = """
 """
 
 _DEFAULT_COLORS = ["#2563eb", "#16a34a", "#f59e0b", "#f97316"]
+_EVIDENCE_TOP_K = 3
+_EVIDENCE_MAX_SNIPPET = 120
+_EVIDENCE_PLACEHOLDER = "- (未检索到可靠证据，请谨慎表述，避免臆造数据)"
+
 
 
 class SlidingWindowContentGenerator:
@@ -151,6 +162,95 @@ class SlidingWindowContentGenerator:
     # ------------------------------------------------------------------
     # 对外入口
     # ------------------------------------------------------------------
+
+    def _build_evidence_query(self, section, key_point: OutlineKeyPoint) -> str:
+        parts: List[str] = []
+        if getattr(key_point, "point", ""):
+            parts.append(key_point.point.strip())
+        summary = getattr(section, "summary", "") or ""
+        if summary.strip():
+            parts.append(summary.strip())
+        title = getattr(section, "title", "") or ""
+        if title.strip():
+            parts.append(title.strip())
+        return " ".join(part for part in parts if part)
+
+    def _retrieve_evidence(self, state: OverallState, query: str, slide_id: int) -> List[Dict[str, Any]]:
+        if not query or not getattr(state, "retriever", None):
+            return []
+        try:
+            retriever = state.retriever
+            extra = {"slide_id": slide_id, "mode": "content_generation"}
+            retrieve_with_metrics = getattr(retriever, "retrieve_with_metrics", None)
+            if callable(retrieve_with_metrics):
+                results = retrieve_with_metrics(
+                    query,
+                    top_k=_EVIDENCE_TOP_K,
+                    match_fn=lambda _item: True,
+                    extra=extra,
+                )
+            else:
+                results = retriever.retrieve(query, top_k=_EVIDENCE_TOP_K)
+        except Exception as exc:  # pragma: no cover - 依赖外部模型环境
+            message = f"RAG 证据检索失败: {exc}"
+            logger.warning(message)
+            state.record_warning(message)
+            return []
+
+        evidence_items: List[Dict[str, Any]] = []
+        for index, item in enumerate(results, start=1):
+            snippet = self._compact_snippet(item.chunk.content)
+            evidence_items.append(
+                {
+                    "evidence_id": f"E{index}",
+                    "chunk_id": item.chunk.chunk_id,
+                    "document_id": item.chunk.document_id,
+                    "source_path": item.chunk.source,
+                    "section_title": item.chunk.section_title,
+                    "snippet": snippet,
+                    "score": round(float(item.score), 4),
+                    "dense_score": round(float(item.dense_score), 4),
+                    "bm25_score": round(float(item.bm25_score), 4),
+                }
+            )
+        if not evidence_items:
+            warning = f"slide#{slide_id} 未检索到证据，已回退占位提示，请人工复核。"
+            logger.warning(warning)
+            state.record_warning(warning)
+        return evidence_items
+
+    @staticmethod
+    def _compact_snippet(text: str) -> str:
+        snippet = " ".join(text.strip().split())
+        if len(snippet) > _EVIDENCE_MAX_SNIPPET:
+            snippet = snippet[: _EVIDENCE_MAX_SNIPPET].rstrip() + "…"
+        return snippet
+
+    def _format_evidence_block(self, evidence_items: List[Dict[str, Any]]) -> str:
+        if not evidence_items:
+            return _EVIDENCE_PLACEHOLDER
+        lines: List[str] = []
+        for item in evidence_items:
+            evidence_id = item.get("evidence_id", "E0")
+            snippet = item.get("snippet", "")
+            source_path = item.get("source_path") or ""
+            section_title = item.get("section_title") or ""
+            source_name = Path(source_path).name if source_path else ""
+            segments = [seg for seg in [source_name, section_title] if seg]
+            source_desc = " / ".join(segments)
+            suffix = f" (来源: {source_desc})" if source_desc else ""
+            lines.append(f"- [{evidence_id}] {snippet}{suffix}")
+        return "\n".join(lines)
+
+    def _record_evidence(self, state: OverallState, slide_id: int, query: str, evidence_items: List[Dict[str, Any]]) -> None:
+        cloned_items = [dict(item) for item in evidence_items]
+        state.evidence_queries[slide_id] = query
+        state.slide_evidence[slide_id] = cloned_items
+        snapshot_manager.write_json(
+            state.run_id,
+            f"03_content/slide_{slide_id:02d}_evidence",
+            {"query": query, "items": cloned_items},
+        )
 
     def generate_all_slides(self, state: OverallState) -> OverallState:
         outline = state.outline
@@ -274,6 +374,10 @@ class SlidingWindowContentGenerator:
         call_context = {"run_id": state.run_id, "stage": "03_content", "name": f"slide_{slide_id:02d}"}
         context_text = self._format_context(context_slides)
         chart_colors = state.selected_style.chart_colors or _DEFAULT_COLORS
+        evidence_query = self._build_evidence_query(section, key_point)
+        evidence_items = self._retrieve_evidence(state, evidence_query, slide_id)
+        evidence_block = self._format_evidence_block(evidence_items)
+        self._record_evidence(state, slide_id, evidence_query, evidence_items)
         prompt = _GENERATION_PROMPT_TEMPLATE.format(
             title=outline.title,
             audience=outline.target_audience,
@@ -284,7 +388,9 @@ class SlidingWindowContentGenerator:
             section_summary=section.summary,
             key_point=key_point.point,
             template_suggestion=key_point.template_suggestion,
-            context=context_text or "(无上下文)",
+            evidence_query=evidence_query or "(未生成查询)",
+            evidence_block=evidence_block,
+            context=context_text or "(暂无历史幻灯片)",
         )
 
         snapshot_manager.write_text(state.run_id, f"03_content/slide_{slide_id:02d}_prompt", prompt)
@@ -297,6 +403,9 @@ class SlidingWindowContentGenerator:
             context_slides,
         )
 
+        slide.metadata.setdefault("evidence_query", evidence_query)
+        slide.metadata["evidence_refs"] = [dict(item) for item in evidence_items]
+        slide.metadata["evidence_ids"] = [item["evidence_id"] for item in evidence_items]
         state.add_slide(slide)
         state.add_summary(self._build_summary(slide), self.window_size)
         state.generation_metadata.append(

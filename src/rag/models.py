@@ -64,9 +64,24 @@ class DocumentChunk(BaseModel):
         return len(self.content)
 
 
+class EvidenceItem(BaseModel):
+    """用于 RAG 过程中提供参考信息的结构"""
+
+    evidence_id: str = Field(..., description="证据ID")
+    chunk_id: str = Field(..., description="对应 DocumentChunk 的ID")
+    document_id: str = Field(..., description="所属原始文档ID")
+    source_path: str = Field(..., description="原始文档路径")
+    snippet: str = Field(..., min_length=1, description="用于提示模型的裁剪文本")
+    section_title: Optional[str] = Field(default=None, description="所在文档章节标题")
+    score: float = Field(0.0, description="综合得分")
+    dense_score: float = Field(0.0, description="向量检索得分")
+    bm25_score: float = Field(0.0, description="BM25 得分")
+    metadata: Dict[str, str] = Field(default_factory=dict, description="扩展字段")
+
 __all__ = [
     "DocumentMetadata",
     "DocumentSection",
     "LoadedDocument",
     "DocumentChunk",
+    "EvidenceItem",
 ]

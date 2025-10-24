@@ -23,6 +23,8 @@
   - 结论记录在 `docs/rag/embedding_selection.md`。  
 - **验收标准**：指定模型在测试语料上的 Top-5 召回率 ≥ 0.85，向量构建耗时满足批量场景（1000 chunk < 5s）。  
 - **完成记录**：
+  - 2025-10-11 @Codex 集成内容生成环节的证据注入：在 `SlidingWindowContentGenerator` 加入 RAG 检索、快照 `slide_xx_evidence.json`、模板注入 Query 与证据列表。
+  - 2025-10-11 @Codex 更新评估链路：`QualityEvaluator` 与 `ConsistencyChecker` 注入证据信息，扩展 `text_tools.format_evidence` 及自定义单测验证 [E1] 标记。
   - 2025-10-11 @Codex 完成 `src/rag/index.py` 与 `src/rag/retriever.py`，实现 ChunkIndex + HybridRetriever，补充 `retrieve_evidence` API 与 `tests/rag/test_retriever.py` 回归
   - snapshots 检索结果持久化尚未实现，保留在 1.3 任务的后续 TODO 中追踪
   - 2025-10-11 @Codex 完成评测：新增 `scripts/eval_embeddings.py`、`docs/rag/embedding_eval_samples.jsonl`、`docs/rag/embedding_selection.md`，生成 `results/embedding_eval.json`；`text2vec-base-chinese` Top-5 召回率 1.0，`bge-large` Top-5 召回率 0.67，建议先以前者 + BM25 组合作为基线方案。
@@ -60,7 +62,7 @@
   - snapshots 功能由于日志用户还没实现，放到 1.3 版本，加个 TODO 追踪
 
 #### 1.4 生成链路集成
-- [ ] **目标**：在内容生成/质量评估/一致性阶段注入证据块，保持上下游一致。  
+- [x] **目标**：在内容生成/质量评估/一致性阶段注入证据块，保持上下游一致。  
 - **实现路径**：  
   - 修改 `SlidingWindowContentGenerator._create_content_slide`：  
     * 将 `key_point` 与滑窗摘要组成检索 query。  
@@ -74,14 +76,18 @@
 - **验收标准**：至少完成一次端到端运行，验证每页 prompt 中包含证据内容，HTML 输出可追踪 `metadata` 中的证据 ID 列表。  
 - **完成记录**：
 
+  - 2025-10-11 @Codex 集成内容生成环节的证据注入：在 `SlidingWindowContentGenerator` 加入 RAG 检索、快照 `slide_xx_evidence.json`、模板注入 Query 与证据列表。
+  - 2025-10-11 @Codex 更新评估链路：`QualityEvaluator` 与 `ConsistencyChecker` 注入证据信息，扩展 `text_tools.format_evidence` 及自定义单测验证 [E1] 标记。
 #### 1.5 监控、回退与性能评估
-- [ ] **目标**：保证检索链路的稳定性与透明性。  
+- [x] **目标**：保证检索链路的稳定性与透明性。  
 - **实现路径**：  
   - 新增 `src/rag/metrics.py`：记录命中率、响应时间、降级次数，输出到 `logs/rag_metrics.jsonl`。  
   - 定义降级策略（例如：检索空结果 → 退回 Outline-based 段落；交叉编码器超时 → 记录 warning 并跳过精排）。  
   - 编写性能回归脚本 `scripts/benchmark_retrieval.py`，定期跑批。  
 - **验收标准**：日志中有结构化记录；在多次运行中验证降级路径有效且有告警。  
 - **完成记录**：
+  - 2025-10-13 @Codex 完成检索监控：新增 `src/rag/metrics.py`、`scripts/benchmark_retrieval.py`、`tests/rag/test_metrics.py`，`HybridRetriever` 增强以支持 metrics logger。
+  - 效果：`benchmark_retrieval.py` 输出 chunk 总数、平均耗时、Top@K 命中率，运行日志写入 `logs/rag_metrics.jsonl` 并覆盖空结果降级统计。
 
 ---
 

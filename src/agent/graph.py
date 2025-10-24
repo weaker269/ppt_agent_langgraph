@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 from typing import Optional
+
+from src.rag.index import IndexBuilder
+from src.rag.models import DocumentMetadata, DocumentSection, LoadedDocument
+from src.rag.retriever import HybridRetriever
+from src.rag.metrics import RetrievalMetricsLogger
+
 
 from .ai_client import AIConfig, AIModelClient
 from .domain import PresentationOutline, SlideContent
@@ -70,6 +77,8 @@ class PPTAgentGraph:
         if state.errors:
             return state
 
+        self._prepare_rag(state)
+
         self.outline_generator.generate_outline(state)
         if state.errors:
             return state
@@ -91,6 +100,96 @@ class PPTAgentGraph:
     # ------------------------------------------------------------------
     # 辅助步骤
     # ------------------------------------------------------------------
+
+    def _prepare_rag(self, state: OverallState) -> None:
+        if state.rag_index is not None or not state.input_text.strip():
+            return
+
+        try:
+            from sentence_transformers import SentenceTransformer  # type: ignore[import]
+        except ImportError:
+            warning = "RAG 嵌入模型依赖 sentence-transformers 未安装，已跳过证据索引构建"
+            logger.warning(warning)
+            state.record_warning(warning)
+            return
+
+        model_source = self._resolve_embedding_model_source()
+        device = os.getenv("RAG_EMBEDDING_DEVICE", "cpu")
+        try:
+            embedding_model = SentenceTransformer(model_source, device=device)
+        except Exception as exc:  # pragma: no cover - 取决于运行环境
+            warning = f"RAG 嵌入模型加载失败: {exc}"
+            logger.warning(warning)
+            state.record_warning(warning)
+            return
+
+        builder = IndexBuilder(embedding_model, chunk_size=280, sentence_overlap=1)
+        clean_text = state.input_text.strip()
+        if not clean_text:
+            return
+
+        document = LoadedDocument(
+            metadata=DocumentMetadata(
+                document_id=state.run_id,
+                source_path=state.input_file_path or "input_text",
+                media_type="text/plain",
+            ),
+            sections=[
+                DocumentSection(
+                    section_id="sec_000",
+                    title="输入资料",
+                    level=1,
+                    text=clean_text,
+                    start_char=0,
+                    end_char=len(clean_text),
+                )
+            ],
+            full_text=clean_text,
+        )
+
+        try:
+            index = builder.build_from_documents([document])
+        except ValueError as exc:
+            warning = f"RAG 索引构建失败: {exc}"
+            logger.warning(warning)
+            state.record_warning(warning)
+            return
+
+        state.rag_index = index
+        metrics_logger = RetrievalMetricsLogger()
+        state.retriever = HybridRetriever(
+            index,
+            dense_top_k=20,
+            bm25_top_k=30,
+            alpha=0.6,
+            metrics_logger=metrics_logger,
+        )
+        snapshot_manager.write_json(
+            state.run_id,
+            "02_rag/index_stats",
+            {
+                "chunk_count": len(index.chunks),
+                "embedding_model": getattr(index, "embedding_model_name", "unknown"),
+                "bm25_vocabulary_size": len(index.bm25_tokens),
+                "device": device,
+            },
+        )
+        logger.info("RAG 索引构建完成，chunk=%s，embedding=%s", len(index.chunks), getattr(index, "embedding_model_name", "unknown"))
+
+    def _resolve_embedding_model_source(self) -> str:
+        preferred_path = os.getenv("RAG_EMBEDDING_MODEL_PATH")
+        if preferred_path and Path(preferred_path).exists():
+            return preferred_path
+
+        preferred_name = os.getenv("RAG_EMBEDDING_MODEL")
+        if preferred_name:
+            return preferred_name
+
+        default_local = Path("E:/hf_cache/models--shibing624--text2vec-base-chinese")
+        if default_local.exists():
+            return str(default_local)
+
+        return "shibing624/text2vec-base-chinese"
 
     def _load_input(self, state: OverallState) -> None:
         if state.input_text.strip():

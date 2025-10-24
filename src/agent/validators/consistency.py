@@ -67,7 +67,7 @@ class ConsistencyChecker:
         prompt = _CONSISTENCY_PROMPT_TEMPLATE.format(
             title=state.outline.title if state.outline else "",
             count=len(state.slides),
-            slides=self._format_slides(state.slides),
+            slides=self._format_slides(state.slides, state),
         )
         snapshot_manager.write_text(state.run_id, "04_consistency/prompt", prompt)
         context = {"run_id": state.run_id, "stage": "04_consistency", "name": "consistency"}
@@ -84,7 +84,7 @@ class ConsistencyChecker:
         return report
 
     @staticmethod
-    def _format_slides(slides: Iterable[SlideContent]) -> str:
+    def _format_slides(slides: Iterable[SlideContent], state: OverallState) -> str:
         lines: List[str] = []
         for slide in slides:
             title = slide.page_title or slide.key_point or slide.section_title or f"幻灯片 {slide.slide_id}"
@@ -93,9 +93,17 @@ class ConsistencyChecker:
                 notes = ConsistencyChecker._strip_html(slide.slide_html)
             summary = text_tools.summarise_text(notes, 1) if notes else ""
             lines.append(f"- 第{slide.slide_id}页《{title}》: {summary}")
+            evidence_items = state.slide_evidence.get(slide.slide_id, [])
+            evidence_line = text_tools.format_evidence(evidence_items, bullet=False)
+            query = state.evidence_queries.get(slide.slide_id, "")
+            if evidence_line:
+                suffix = f" | Query: {query}" if query else ""
+                lines.append(f"  证据: {evidence_line}{suffix}")
         return "\n".join(lines)
 
-    @staticmethod
+
+
+
     def _strip_html(html: str) -> str:
         clean = re.sub(r"<[^>]+>", " ", html)
         return " ".join(clean.split())[:160]

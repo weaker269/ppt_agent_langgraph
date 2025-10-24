@@ -3,10 +3,10 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .domain import (
     ConsistencyReport,
@@ -31,6 +31,7 @@ class GenerationMetadata(BaseModel):
 
 class OverallState(BaseModel):
     """LangGraph 节点间传递的全局状态。"""
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     # 运行信息
     run_id: str = Field(default_factory=lambda: uuid4().hex[:12])
@@ -59,6 +60,12 @@ class OverallState(BaseModel):
     slide_quality: Dict[int, QualityScore] = Field(default_factory=dict)
     quality_feedback: Dict[int, List[QualityFeedback]] = Field(default_factory=dict)
     consistency_report: Optional[ConsistencyReport] = None
+
+    # RAG 资源
+    rag_index: Optional[Any] = Field(default=None, exclude=True)
+    retriever: Optional[Any] = Field(default=None, exclude=True)
+    slide_evidence: Dict[int, List[Dict[str, Any]]] = Field(default_factory=dict)
+    evidence_queries: Dict[int, str] = Field(default_factory=dict)
 
     # 元数据
     generation_metadata: List[GenerationMetadata] = Field(default_factory=list)
