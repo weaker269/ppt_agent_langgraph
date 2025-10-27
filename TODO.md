@@ -147,28 +147,75 @@
 ### 三、一致性与反思联动
 
 #### 3.1 质量评估证据化
-- [ ] **目标**：让质量评估 LLM 明确引用证据来判定问题，减少漏检。  
-- **实现路径**：  
-  - 在 `QualityEvaluator` prompt 中新增 `Evidence` section；若 evidence 空则显式提示风险。  
-  - 评估结果 `QualityFeedback` 引入 `evidence_refs` 字段，指明问题来源。  
-- **验收标准**：质量反馈中能看到证据编号，且反思阶段可读取。  
+- [x] **目标**：让质量评估 LLM 明确引用证据来判定问题，减少漏检。
+- **实现路径**：
+  - 在 `QualityEvaluator` prompt 中新增 `Evidence` section；若 evidence 空则显式提示风险。
+  - 评估结果 `QualityFeedback` 引入 `evidence_refs` 字段，指明问题来源。
+- **验收标准**：质量反馈中能看到证据编号，且反思阶段可读取。
 - **完成记录**：
+```
+2025-10-27 @Claude
+- 完成阶段 3.1 质量评估证据化：
+  - 扩展数据模型：src/agent/domain.py:217-225 (QualityFeedback 新增 evidence_refs)
+  - 扩展响应模型：src/agent/models.py:122-135 (QualityAssessmentResponse 新增 issues 结构化字段)
+  - 修改质量评估器：src/agent/evaluators/quality.py:40-62 (Prompt 要求标注证据 ID)
+  - 重构反馈构建逻辑：src/agent/evaluators/quality.py:145-193 (_build_feedback 支持新旧格式与证据引用提取)
+  - 增强验证逻辑：src/agent/evaluators/quality.py:137-170 (evaluate 添加证据 ID 验证)
+  - 更新 Stub 实现：src/agent/ai_client.py:682-701 (返回包含 issues 的新格式)
+- 效果：质量反馈包含证据引用，证据验证快照正确生成，无效 ID 触发警告，Stub/真实模式均正常
+- 验证方式：Stub 模式运行 main.py，检查 snapshots/*/04_quality/slide_*_evidence_validation.json
+2025-10-27 @Codex
+- 完成阶段 3.1 单元测试验证：
+  - 新增 tests/agent/test_quality_evidence.py 覆盖证据引用校验、兼容逻辑
+  - 覆盖率：src/agent/evaluators/quality.py 97%（pytest --cov=src/agent/evaluators/quality.py）
+  - 测试命令：pytest tests/agent/test_quality_evidence.py -v
+```
 
 #### 3.2 反思阶段闭环
-- [ ] **目标**：确保反思 prompt 包含所有必要信息并约束改写范围。  
-- **实现路径**：  
-  - `_regenerate` 生成 prompt 时附加：质量反馈摘要、上下文摘要、证据原文。  
-  - 对反思生成的幻灯片校验：必须引用原证据或说明新增证据（并触发检索）。  
-- **验收标准**：触发反思的页面在第二版输出中问题减少且保留证据引用。  
+- [x] **目标**：确保反思 prompt 包含所有必要信息并约束改写范围。
+- **实现路径**：
+  - `_regenerate` 生成 prompt 时附加：质量反馈摘要、上下文摘要、证据原文。
+  - 对反思生成的幻灯片校验：必须引用原证据或说明新增证据（并触发检索）。
+- **验收标准**：触发反思的页面在第二版输出中问题减少且保留证据引用。
 - **完成记录**：
+```
+2025-10-27 @Claude
+- 完成阶段 3.2 反思阶段闭环：
+  - 增强反思 Prompt：src/agent/generators/content.py:109-135 (明确证据一致性要求，禁止臆造数据)
+  - 修改 _regenerate：src/agent/generators/content.py:609-626 (添加证据变更记录)
+  - 新增验证方法：src/agent/generators/content.py:628-662 (_validate_evidence_consistency 检测证据 ID 变化)
+- 效果：反思后保留原始证据引用，检测证据变更（added/removed/retained），生成证据变更快照，识别 [需补充证据] 标记
+- 验证方式：Stub 模式触发反思，检查 snapshots/*/03_content/slide_*_reflection_evidence_diff_*.json，确认证据引用完整性
+2025-10-27 @Codex
+- 完成阶段 3.2 反思闭环测试：
+  - 新增 tests/agent/test_reflection_evidence.py 验证证据 diff、提示语与元数据继承
+  - 覆盖率：content.py 反思区段 96.7%（coverage json 统计 560-663 行）
+  - 测试命令：pytest tests/agent/test_reflection_evidence.py -v
+```
 
 #### 3.3 一致性检查增强
-- [ ] **目标**：将一致性问题定位到证据层，便于人工排查。  
-- **实现路径**：  
-  - `ConsistencyChecker` 获取证据后，对比跨页用词、数据；问题结构中加入 `evidence_refs`。  
-  - 若模型返回的问题缺乏证据，记录 warning 并建议人工复核。  
-- **验收标准**：一致性报告中包含证据引用，且重复/矛盾页可快速定位。  
+- [x] **目标**：将一致性问题定位到证据层，便于人工排查。
+- **实现路径**：
+  - `ConsistencyChecker` 获取证据后，对比跨页用词、数据；问题结构中加入 `evidence_refs`。
+  - 若模型返回的问题缺乏证据，记录 warning 并建议人工复核。
+- **验收标准**：一致性报告中包含证据引用，且重复/矛盾页可快速定位。
 - **完成记录**：
+```
+2025-10-27 @Claude
+- 完成阶段 3.3 一致性检查增强：
+  - 扩展数据模型：src/agent/domain.py:236-249 (ConsistencyIssue 新增 evidence_refs 和 conflicting_evidence_pairs)
+  - 修改一致性 Prompt：src/agent/validators/consistency.py:31-49 (要求标注证据 ID)
+  - 重构 _convert_issue：src/agent/validators/consistency.py:114-141 (提取并验证证据引用，检测缺失情况)
+  - 新增证据冲突检测：src/agent/validators/consistency.py:148-193 (_augment_with_evidence_conflicts 启发式检测)
+  - 增强 check 方法：src/agent/validators/consistency.py:85-91 (调用冲突检测，记录统计信息)
+- 效果：一致性问题包含证据引用，自动检测缺少引用的应有证据问题，启发式检测同一证据的潜在冲突，日志输出证据引用统计
+- 验证方式：Stub 模式运行，检查一致性报告的 issues 中证据引用信息，查看日志中的统计输出
+2025-10-27 @Codex
+- 完成阶段 3.3 一致性增强测试：
+  - 新增 tests/agent/test_consistency_evidence.py 覆盖证据引用提取与冲突检测
+  - 覆盖率：src/agent/validators/consistency.py 90%
+  - 测试命令：pytest tests/agent/test_consistency_evidence.py -v
+```
 
 ---
 

@@ -681,7 +681,7 @@ class AIModelClient:
             }
         elif model is QualityAssessmentResponse:
             payload = {
-                "overall_score": 90.0,
+                "overall_score": 90.0,  # 恢复默认分数
                 "logic_score": 90.0,
                 "relevance_score": 90.0,
                 "language_score": 90.0,
@@ -690,6 +690,14 @@ class AIModelClient:
                 "weaknesses": ["占位结果，仅供内部调试"],
                 "suggestions": ["连接真实模型以获取正式评审结果。"],
                 "pass_threshold": True,
+                "issues": [
+                    {
+                        "dimension": "relevance",
+                        "description": "占位问题：内容深度可进一步增强",
+                        "suggestion": "补充更多数据支撑和案例",
+                        "evidence_refs": ["E1", "E2"]
+                    }
+                ],
             }
         elif model is ConsistencyAnalysisResponse:
             payload = {

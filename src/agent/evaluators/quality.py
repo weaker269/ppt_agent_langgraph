@@ -39,6 +39,7 @@ _QUALITY_USER_PROMPT_TEMPLATE = """
 
 **输出 JSON 格式定义**:
 - **重要规则**: 如果 JSON 字符串的值中包含双引号（"），您必须使用反斜杠进行转义（\\"）。
+- **证据引用要求**: 每条问题（issue）必须标注支撑该判断的证据 ID（格式：["E1", "E2"]）。如果问题不基于证据而是基于版式/语言风格等，可以使用空数组 []。
 ```json
 {{
   "overall_score": "float // 综合总分 (0-100)",
@@ -48,8 +49,16 @@ _QUALITY_USER_PROMPT_TEMPLATE = """
   "layout_score": "float // 版式维度得分",
   "pass_threshold": "boolean // 是否达到质量标准 (true/false)",
   "strengths": "array[string] // 优点列表",
-  "weaknesses": "array[string] // 缺点列表",
-  "suggestions": "array[string] // 改进建议列表"
+  "weaknesses": "array[string] // 缺点列表（向后兼容，建议使用 issues）",
+  "suggestions": "array[string] // 改进建议列表（向后兼容，建议使用 issues）",
+  "issues": [
+    {{
+      "dimension": "string // 问题所属维度：logic, relevance, language, layout",
+      "description": "string // 问题的具体描述",
+      "suggestion": "string // 具体的改进建议",
+      "evidence_refs": "array[string] // 支撑该问题的证据 ID 列表，如 [\"E1\", \"E2\"]"
+    }}
+  ]
 }}
 
 **待评估的幻灯片信息**
@@ -124,7 +133,40 @@ class QualityEvaluator:
             confidence=0.7,
         )
         feedback = self._build_feedback(response)
-        logger.debug("幻灯片 %s 质量得分 %.1f", slide.slide_id, score.total_score)
+
+        # 验证证据引用的有效性
+        valid_evidence_ids = {item["evidence_id"] for item in evidence_items}
+        evidence_validation = {"total_refs": 0, "valid_refs": 0, "invalid_refs": []}
+
+        for fb in feedback:
+            for eid in fb.evidence_refs:
+                evidence_validation["total_refs"] += 1
+                if eid in valid_evidence_ids:
+                    evidence_validation["valid_refs"] += 1
+                else:
+                    evidence_validation["invalid_refs"].append(eid)
+
+        if evidence_validation["invalid_refs"]:
+            logger.warning(
+                "幻灯片 %s 质量反馈包含无效证据 ID：%s",
+                slide.slide_id,
+                evidence_validation["invalid_refs"]
+            )
+
+        # 记录证据引用完整性到快照
+        snapshot_manager.write_json(
+            state.run_id,
+            f"04_quality/slide_{slide.slide_id:02d}_evidence_validation",
+            evidence_validation
+        )
+
+        logger.debug(
+            "幻灯片 %s 质量得分 %.1f，证据引用 %d/%d 有效",
+            slide.slide_id,
+            score.total_score,
+            evidence_validation["valid_refs"],
+            evidence_validation["total_refs"]
+        )
         return score, feedback
 
     @staticmethod
@@ -135,19 +177,52 @@ class QualityEvaluator:
     @staticmethod
     def _build_feedback(response: QualityAssessmentResponse) -> List[QualityFeedback]:
         feedback: List[QualityFeedback] = []
-        weaknesses = response.weaknesses or []
-        suggestions = response.suggestions or []
-        priorities = ["high", "medium", "medium", "low"]
-        for idx, weakness in enumerate(weaknesses[:4]):
-            suggestion = suggestions[idx] if idx < len(suggestions) else "请进一步明确改进动作"
-            feedback.append(
-                QualityFeedback(
-                    dimension=list(QualityDimension)[idx % len(QualityDimension)],
-                    issue_description=weakness,
-                    suggestion=suggestion,
-                    priority=priorities[idx % len(priorities)],
+
+        # 优先使用结构化的 issues（包含证据引用）
+        if response.issues:
+            for issue in response.issues[:4]:
+                try:
+                    dimension_str = issue.get("dimension", "logic")
+                    dimension = QualityDimension(dimension_str) if dimension_str in [d.value for d in QualityDimension] else QualityDimension.LOGIC
+                except (ValueError, AttributeError):
+                    dimension = QualityDimension.LOGIC
+
+                description = issue.get("description", "")
+                suggestion = issue.get("suggestion", "请进一步明确改进动作")
+                evidence_refs = issue.get("evidence_refs", [])
+
+                # 如果缺少证据引用，记录 warning
+                if not evidence_refs and any(keyword in description for keyword in ["数据", "事实", "证据", "原文"]):
+                    logger.warning("质量反馈缺少证据引用：%s", description[:50])
+
+                feedback.append(
+                    QualityFeedback(
+                        dimension=dimension,
+                        issue_description=description,
+                        suggestion=suggestion,
+                        priority="high" if not evidence_refs else "medium",
+                        evidence_refs=evidence_refs if isinstance(evidence_refs, list) else [],
+                    )
                 )
-            )
+        # 向后兼容：如果没有 issues，使用 weaknesses/suggestions
+        else:
+            weaknesses = response.weaknesses or []
+            suggestions = response.suggestions or []
+            priorities = ["high", "medium", "medium", "low"]
+            for idx, weakness in enumerate(weaknesses[:4]):
+                suggestion = suggestions[idx] if idx < len(suggestions) else "请进一步明确改进动作"
+                feedback.append(
+                    QualityFeedback(
+                        dimension=list(QualityDimension)[idx % len(QualityDimension)],
+                        issue_description=weakness,
+                        suggestion=suggestion,
+                        priority=priorities[idx % len(priorities)],
+                        evidence_refs=[],  # 旧格式没有证据引用
+                    )
+                )
+            if weaknesses:
+                logger.warning("质量评估使用旧格式（weaknesses/suggestions），缺少证据引用")
+
         return feedback
 
 

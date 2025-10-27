@@ -129,6 +129,10 @@ class QualityAssessmentResponse(BaseModel):
     weaknesses: List[str] = Field(default_factory=list)
     suggestions: List[str] = Field(default_factory=list)
     pass_threshold: bool = True
+    issues: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="结构化问题列表，每项包含 dimension, description, suggestion, evidence_refs"
+    )
 
     def as_dimension_map(self) -> Dict[QualityDimension, float]:
         return {

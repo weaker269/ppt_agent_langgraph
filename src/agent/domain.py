@@ -219,6 +219,10 @@ class QualityFeedback(BaseModel):
     issue_description: str
     suggestion: str
     priority: str = Field("medium", pattern="^(low|medium|high)$")
+    evidence_refs: List[str] = Field(
+        default_factory=list,
+        description="支撑该问题判定的证据块 ID 列表（如 [E1], [E2]）"
+    )
 
 
 class ConsistencyIssueType(str, Enum):
@@ -235,6 +239,14 @@ class ConsistencyIssue(BaseModel):
     slide_ids: List[int]
     description: str
     suggestion: str
+    evidence_refs: Optional[List[str]] = Field(
+        None,
+        description="问题相关的证据块 ID 列表（如 [E1], [E3]），用于快速定位问题来源"
+    )
+    conflicting_evidence_pairs: Optional[List[tuple]] = Field(
+        None,
+        description="冲突的证据对列表，如 [('E1', 'E5')]，用于标记互相矛盾的证据"
+    )
 
 
 class ConsistencyReport(BaseModel):

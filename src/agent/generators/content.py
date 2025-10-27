@@ -117,7 +117,7 @@ _REFLECTION_PROMPT_TEMPLATE = """
 **上下文信息**（前序页面摘要，保持逻辑衔接）:
 {context_summary}
 
-**参考证据**:
+**参考证据**（原始幻灯片所依据的证据块）:
 {evidence_block}
 
 **当前 HTML 结构**:
@@ -125,10 +125,14 @@ _REFLECTION_PROMPT_TEMPLATE = """
 
 **指令**:
 1.  **分析反馈**: 仔细阅读反馈，理解需要改进的核心问题。
-2.  **执行修改**:
+2.  **证据一致性要求**（重要！）:
+    * **必须基于原始证据**：所有事实性内容必须基于上方"参考证据"部分，不得臆造数据。
+    * **保留证据引用**：如果原幻灯片引用了证据 [E1], [E2] 等，改进后的版本仍需保持这些引用。
+    * **新增数据说明**：如果改进需要新的数据或事实支撑，请在 `speaker_notes` 中标注 "[需补充证据]" 提示。
+3.  **执行修改**:
     * 如果反馈指出需要图表或数据强化，请补充或修改 `charts` 字段及对应的 HTML 容器。
     * 如果反馈强调逻辑或语言，请优化 `slide_html` 中的文本结构和 `speaker_notes`。
-3.  **严格格式化输出**: 您的唯一合法输出是一个严格遵循初始生成格式的 JSON 对象。如果 JSON 字符串的值中包含双引号（"），您必须使用反斜杠进行转义（\\"）。
+4.  **严格格式化输出**: 您的唯一合法输出是一个严格遵循初始生成格式的 JSON 对象。如果 JSON 字符串的值中包含双引号（"），您必须使用反斜杠进行转义（\\"）。
 
 **输出 JSON 格式**:
 ```json
@@ -601,7 +605,61 @@ class SlidingWindowContentGenerator:
         regenerated.reflection_count = slide.reflection_count + 1
         regenerated.metadata.update(slide.metadata)
         regenerated.metadata["reflection_round"] = regenerated.reflection_count
+
+        # 证据一致性校验（阶段 3.2）
+        evidence_diff = self._validate_evidence_consistency(slide, regenerated)
+        if evidence_diff["has_changes"]:
+            logger.warning(
+                "反思后证据引用发生变化：slide_id=%s，新增=%s，删除=%s",
+                slide.slide_id,
+                evidence_diff["added"],
+                evidence_diff["removed"]
+            )
+
+        # 记录证据变更到快照
+        snapshot_manager.write_json(
+            state.run_id,
+            f"03_content/slide_{slide.slide_id:02d}_reflection_evidence_diff_{regenerated.reflection_count}",
+            evidence_diff
+        )
+
         return regenerated
+
+    @staticmethod
+    def _validate_evidence_consistency(
+        original: SlideContent,
+        regenerated: SlideContent
+    ) -> Dict[str, Any]:
+        """验证反思前后的证据引用一致性。
+
+        Args:
+            original: 原始幻灯片
+            regenerated: 反思后的幻灯片
+
+        Returns:
+            证据变更信息字典
+        """
+        original_refs = set(original.metadata.get("evidence_ids", []))
+        regenerated_refs = set(regenerated.metadata.get("evidence_ids", []))
+
+        added = list(regenerated_refs - original_refs)
+        removed = list(original_refs - regenerated_refs)
+        retained = list(original_refs & regenerated_refs)
+
+        has_changes = len(added) > 0 or len(removed) > 0
+
+        # 检测是否需要补充证据（通过 speaker_notes 中的标记）
+        needs_new_evidence = "[需补充证据]" in (regenerated.speaker_notes or "")
+
+        return {
+            "has_changes": has_changes,
+            "added": added,
+            "removed": removed,
+            "retained": retained,
+            "needs_new_evidence": needs_new_evidence,
+            "original_count": len(original_refs),
+            "regenerated_count": len(regenerated_refs)
+        }
 
     def _build_summary(
         self,
