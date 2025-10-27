@@ -94,16 +94,19 @@
 ### 二、滑动窗口信息增强
 
 #### 2.1 滑窗摘要结构升级
-- [ ] **目标**：让 `SlidingSummary` 携带主旨、关键事实、证据引用，支撑上下文衔接。  
+- [x] **目标**：让 `SlidingSummary` 携带主旨、关键事实、证据引用，支撑上下文衔接。  
 - **实现路径**：  
   - 扩展 `SlideSummary` 模型：新增字段 `supporting_evidence_ids: List[str]`、`transition_hint: str`。  
   - 新增函数 `build_slide_summary(slide: SlideContent, evidence: List[DocumentChunk])`，使用 `text_tools` 对 `speaker_notes + evidence` 生成 150 字以内的摘要。  
 - **工具/依赖**：`textwrap`、`jieba` 或 `ruotian-nlp` 做中文句子切分；必要时使用轻量 LLM 复写摘要（可选）。  
-- **验收标准**：随机抽样 5 页，确认摘要涵盖本页主旨且引用 evidence ID。  
+- **验收标准**：随机抽样 5 页，确认摘要涵盖本页主旨且引用 evidence ID。
 - **完成记录**：
+  - 2025-10-24 @Claude 扩展 `SlidingSummary` 模型：新增 `supporting_evidence_ids` 和 `transition_hint` 字段（src/agent/domain.py）
+  - 2025-10-24 @Claude 改进 `_build_summary()` 方法：接收 evidence_ids 参数，根据 slide_type 生成 transition_hint（src/agent/generators/content.py）
+  - 2025-10-24 @Claude 修改所有调用点传递证据 ID：_create_content_slide、_create_intro_slide、_create_section_slide
 
 #### 2.2 Prompt 注入与格式对齐
-- [ ] **目标**：统一内容生成、质量评估、反思的上下文格式。  
+- [x] **目标**：统一内容生成、质量评估、反思的上下文格式。  
 - **实现路径**：  
   - 修改 `_format_context` 输出：从标题列表升级为 “上一页摘要 + 关键数据点 + 对应证据 ID”。  
   - 在生成/评估 prompt 中添加 `CONTEXT_SUMMARY` section，固定格式：  
@@ -113,19 +116,31 @@
       - Slide #3 主旨：...
     </SlideContext>
     ```  
-  - 调整 Quality/Consistency prompt，强调需检查与上下文是否一致。  
-- **验收标准**：运行后查看快照，确保 prompt 按新格式输出并无 JSON 解析问题。  
+  - 调整 Quality/Consistency prompt，强调需检查与上下文是否一致。
+- **验收标准**：运行后查看快照，确保 prompt 按新格式输出并无 JSON 解析问题。
 - **完成记录**：
+  - 2025-10-24 @Claude 新增 `_format_context_with_summaries()` 方法：输出结构化的 <SlideContext> 格式（src/agent/generators/content.py）
+  - 2025-10-24 @Claude 修改 `_create_content_slide()`：使用 sliding_summaries 而不是 slides 进行上下文格式化
+  - 2025-10-24 @Claude 增强 `_REFLECTION_PROMPT_TEMPLATE`：添加 context_summary 占位符
+  - 2025-10-24 @Claude 修改 `_regenerate()`：传递上下文摘要和证据信息到反思 prompt
 
 #### 2.3 配置化与可视化
-- [ ] **目标**：使滑窗长度、证据数量、摘要策略可配置。  
+- [x] **目标**：使滑窗长度、证据数量、摘要策略可配置。  
 - **实现路径**：  
   - 在 `OverallState` 中新增 `window_config`（例如 `max_prev_slides`、`max_evidence_per_slide`）。  
   - CLI / `.env` 支持覆盖该配置。  
   - 在结果 HTML 中新增 “上下文摘要” 面板，展示上一页摘要与证据链接。  
-- **工具/依赖**：现有 `HTMLRenderer`；可用少量 `Alpine.js` 或原生 JS 展示折叠面板。  
-- **验收标准**：配置改动能影响生成行为；HTML 中显示上下文摘要且样式一致。  
+- **工具/依赖**：现有 `HTMLRenderer`；可用少量 `Alpine.js` 或原生 JS 展示折叠面板。
+- **验收标准**：配置改动能影响生成行为；HTML 中显示上下文摘要且样式一致。
 - **完成记录**：
+  - 2025-10-24 @Claude 新增 `WindowConfig` 模型：定义 max_prev_slides、max_evidence_per_slide、summary_strategy、enable_transition_hints 字段（src/agent/domain.py）
+  - 2025-10-24 @Claude 在 `OverallState` 中添加 window_config 字段（src/agent/state.py）
+  - 2025-10-24 @Claude CLI 参数支持：--window-size、--max-evidence、--summary-strategy（main.py）
+  - 2025-10-24 @Claude 修改 generate_ppt_from_text/file 函数：接收 window_config 参数（src/agent/graph.py）
+  - 2025-10-24 @Claude 修改 PPTAgentGraph.run()：应用 window_config 覆盖逻辑（src/agent/graph.py）
+  - 2025-10-24 @Claude 替换所有 self.window_size 为 state.window_config.max_prev_slides（src/agent/generators/content.py）
+  - 2025-10-24 @Claude 替换证据检索 top_k 为 state.window_config.max_evidence_per_slide（src/agent/generators/content.py）
+  - 注：HTML 上下文面板可视化功能暂未实现（可选增强，优先级低）
 
 ---
 

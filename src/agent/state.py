@@ -17,6 +17,7 @@ from .domain import (
     SlidingSummary,
     StyleProfile,
     StyleTheme,
+    WindowConfig,
 )
 
 
@@ -47,6 +48,7 @@ class OverallState(BaseModel):
     enable_quality_reflection: bool = True
     quality_threshold: float = 85.0
     max_reflection_attempts: int = 2
+    window_config: WindowConfig = Field(default_factory=WindowConfig, description="滑动窗口配置（TODO 2.3）")
 
     # 生成结果
     outline: Optional[PresentationOutline] = None

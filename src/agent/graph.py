@@ -47,52 +47,56 @@ class PPTAgentGraph:
     # 对外接口
     # ------------------------------------------------------------------
 
-    def run(self, input_text: str = "", input_file_path: str = "") -> OverallState:
+    def run(
+        self,
+        input_text: str = "",
+        input_file_path: str = "",
+        window_config: Optional[Dict[str, Any]] = None,
+    ) -> OverallState:
+        """运行 PPT 生成流程（TODO 2.3：支持 window_config 覆盖）。"""
+        from .domain import WindowConfig
+        
+        # 构建状态对象
         state = OverallState(
-
             input_text=input_text,
-
             input_file_path=input_file_path,
-
             model_provider=self.client.config.provider,
-
             model_name=self.client.config.model,
-
         )
-
+        
+        # 应用 window_config 覆盖（TODO 2.3）
+        if window_config:
+            state.window_config = WindowConfig(**{**state.window_config.model_dump(), **window_config})
+        
         logger.info("启动 PPT 生成流程：RunId=%s", state.run_id)
-
         snapshot_manager.write_json(state.run_id, "00_run/config", {
-
             "provider": state.model_provider,
-
             "model": state.model_name,
-
             "quality_reflection": state.enable_quality_reflection,
-
+            "window_config": state.window_config.model_dump(),
         })
-
+        
         start_time = time.time()
         self._load_input(state)
         if state.errors:
             return state
-
+        
         self._prepare_rag(state)
-
+        
         self.outline_generator.generate_outline(state)
         if state.errors:
             return state
-
+        
         self.style_selector.select_style_theme(state)
         self.content_generator.generate_all_slides(state)
         if state.errors:
             return state
-
+        
         state.consistency_report = self.consistency_checker.check(state)
         self.renderer.render_presentation(state)
         if state.errors:
             return state
-
+        
         self._persist(state)
         logger.info("完整流程完成，耗时 %.2fs", time.time() - start_time)
         return state
@@ -145,8 +149,6 @@ class PPTAgentGraph:
                 state.rag_index = index
                 
                 # 创建检索器
-                from src.rag.metrics import RetrievalMetricsLogger
-                from src.rag.retriever import HybridRetriever
                 metrics_logger = RetrievalMetricsLogger()
                 state.retriever = HybridRetriever(
                     index,
@@ -314,12 +316,32 @@ def create_ppt_agent(model_provider: str = "openai", model_name: str = "gpt-3.5-
     return PPTAgentGraph(model_provider=model_provider, model_name=model_name, use_stub=use_stub)
 
 
-def generate_ppt_from_text(text: str, model_provider: str = "openai", model_name: str = "gpt-3.5-turbo", use_stub: bool = False) -> OverallState:
-    return create_ppt_agent(model_provider, model_name, use_stub).run(input_text=text)
+def generate_ppt_from_text(
+    text: str,
+    model_provider: str = "openai",
+    model_name: str = "gpt-3.5-turbo",
+    use_stub: bool = False,
+    window_config: Optional[Dict[str, Any]] = None,
+) -> OverallState:
+    """从文本生成 PPT（TODO 2.3：支持 window_config）。"""
+    return create_ppt_agent(model_provider, model_name, use_stub).run(
+        input_text=text,
+        window_config=window_config
+    )
 
 
-def generate_ppt_from_file(file_path: str, model_provider: str = "openai", model_name: str = "gpt-3.5-turbo", use_stub: bool = False) -> OverallState:
-    return create_ppt_agent(model_provider, model_name, use_stub).run(input_file_path=file_path)
+def generate_ppt_from_file(
+    file_path: str,
+    model_provider: str = "openai",
+    model_name: str = "gpt-3.5-turbo",
+    use_stub: bool = False,
+    window_config: Optional[Dict[str, Any]] = None,
+) -> OverallState:
+    """从文件生成 PPT（TODO 2.3：支持 window_config）。"""
+    return create_ppt_agent(model_provider, model_name, use_stub).run(
+        input_file_path=file_path,
+        window_config=window_config
+    )
 
 
 __all__ = [

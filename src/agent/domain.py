@@ -184,6 +184,15 @@ class SlidingSummary(BaseModel):
     main_message: str
     key_concepts: List[str] = Field(default_factory=list)
     logical_link: str = ""
+    supporting_evidence_ids: List[str] = Field(
+        default_factory=list,
+        description="本页引用的证据块 ID 列表，用于上下文追踪"
+    )
+    transition_hint: str = Field(
+        "",
+        max_length=200,
+        description="到下一页的过渡提示，辅助上下文衔接"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +249,44 @@ class ConsistencyReport(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# 滑动窗口配置（TODO 2.3）
+# ---------------------------------------------------------------------------
+
+
+class WindowConfig(BaseModel):
+    """滑动窗口配置参数。
+    
+    根据 TODO 2.3 要求，使滑窗长度、证据数量、摘要策略可配置。
+    """
+    
+    max_prev_slides: int = Field(
+        3,
+        ge=1,
+        le=10,
+        description="滑动窗口大小，保留最近 N 页摘要用于上下文"
+    )
+    max_evidence_per_slide: int = Field(
+        3,
+        ge=1,
+        le=10,
+        description="每页最多检索的证据块数量"
+    )
+    summary_strategy: str = Field(
+        "auto",
+        pattern="^(auto|detailed|concise)$",
+        description="摘要生成策略：auto 自动、detailed 详细、concise 简洁"
+    )
+    enable_transition_hints: bool = Field(
+        True,
+        description="是否生成过渡提示"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 样式配置
+# ---------------------------------------------------------------------------
+
 class StyleProfile(BaseModel):
     theme: StyleTheme
     color_palette: Dict[str, str] = Field(default_factory=dict)
@@ -258,6 +305,7 @@ __all__ = [
     "PresentationOutline",
     "SlideContent",
     "SlidingSummary",
+    "WindowConfig",
     "EChart",
     "QualityDimension",
     "QualityScore",

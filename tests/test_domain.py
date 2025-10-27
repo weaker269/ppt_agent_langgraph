@@ -11,7 +11,11 @@ def test_outline_total_slides_estimation():
 
 
 def test_slide_content_defaults():
-    slide = SlideContent(slide_id=1, title="示例")
+    slide = SlideContent(
+        slide_id=1,
+        page_title="示例",
+        slide_html="<div>示例内容</div>"
+    )
     assert slide.slide_type == SlideType.CONTENT
-    assert slide.layout == SlideLayout.STANDARD
-    assert slide.bullet_points == []
+    assert slide.layout_template == "standard_single_column"
+    assert slide.charts == []

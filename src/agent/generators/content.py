@@ -114,6 +114,9 @@ _REFLECTION_PROMPT_TEMPLATE = """
 **反馈摘要**:
 {feedback}
 
+**上下文信息**（前序页面摘要，保持逻辑衔接）:
+{context_summary}
+
 **参考证据**:
 {evidence_block}
 
@@ -182,15 +185,16 @@ class SlidingWindowContentGenerator:
             retriever = state.retriever
             extra = {"slide_id": slide_id, "mode": "content_generation"}
             retrieve_with_metrics = getattr(retriever, "retrieve_with_metrics", None)
+            top_k = state.window_config.max_evidence_per_slide
             if callable(retrieve_with_metrics):
                 results = retrieve_with_metrics(
                     query,
-                    top_k=_EVIDENCE_TOP_K,
+                    top_k=top_k,
                     match_fn=lambda _item: True,
                     extra=extra,
                 )
             else:
-                results = retriever.retrieve(query, top_k=_EVIDENCE_TOP_K)
+                results = retriever.retrieve(query, top_k=top_k)
         except Exception as exc:  # pragma: no cover - 依赖外部模型环境
             message = f"RAG 证据检索失败: {exc}"
             logger.warning(message)
@@ -267,7 +271,7 @@ class SlidingWindowContentGenerator:
             total_sections,
             total_key_points,
             "开启" if state.enable_quality_reflection else "关闭",
-            self.window_size,
+            state.window_config.max_prev_slides,
         )
         snapshot_manager.write_json(
             state.run_id,
@@ -340,7 +344,7 @@ class SlidingWindowContentGenerator:
             speaker_notes=f"欢迎各位，今天我们分享《{outline.title}》。先介绍议程，再逐步展开章节。",
         )
         state.add_slide(slide)
-        state.add_summary(self._build_summary(slide), self.window_size)
+        state.add_summary(self._build_summary(slide, []), state.window_config.max_prev_slides)
 
     def _create_section_slide(self, state: OverallState, *, section_title: str, section_summary: str, section_index: int) -> None:
         slide_id = len(state.slides) + 1
@@ -366,13 +370,16 @@ class SlidingWindowContentGenerator:
             speaker_notes=f"接下来进入章节《{section_title}》，我们将关注：{section_summary}",
         )
         state.add_slide(slide)
-        state.add_summary(self._build_summary(slide), self.window_size)
+        state.add_summary(self._build_summary(slide, []), state.window_config.max_prev_slides)
 
     def _create_content_slide(self, state: OverallState, outline: PresentationOutline, section, key_point: OutlineKeyPoint) -> None:
         slide_id = len(state.slides) + 1
-        context_slides = state.slides[-self.window_size :]
+        # 使用滑窗摘要而不是原始幻灯片（TODO 2.2）
+        context_summaries = state.sliding_summaries[-state.window_config.max_prev_slides :]
+        # 同时保留原始幻灯片用于质量评估
+        context_slides = state.slides[-state.window_config.max_prev_slides :]
         call_context = {"run_id": state.run_id, "stage": "03_content", "name": f"slide_{slide_id:02d}"}
-        context_text = self._format_context(context_slides)
+        context_text = self._format_context_with_summaries(context_summaries)
         chart_colors = state.selected_style.chart_colors or _DEFAULT_COLORS
         evidence_query = self._build_evidence_query(section, key_point)
         evidence_items = self._retrieve_evidence(state, evidence_query, slide_id)
@@ -407,7 +414,9 @@ class SlidingWindowContentGenerator:
         slide.metadata["evidence_refs"] = [dict(item) for item in evidence_items]
         slide.metadata["evidence_ids"] = [item["evidence_id"] for item in evidence_items]
         state.add_slide(slide)
-        state.add_summary(self._build_summary(slide), self.window_size)
+        # 传递证据 ID 给摘要生成器
+        evidence_ids = [item["evidence_id"] for item in evidence_items]
+        state.add_summary(self._build_summary(slide, evidence_ids), state.window_config.max_prev_slides)
         state.generation_metadata.append(
             GenerationMetadata(
                 slide_id=slide.slide_id,
@@ -549,51 +558,166 @@ class SlidingWindowContentGenerator:
         key_point: OutlineKeyPoint,
         context: Dict[str, Any],
     ) -> SlideContent:
+        """基于质量反馈重新生成幻灯片。
+        
+        根据 TODO 2.2 要求，注入上下文摘要和证据信息。
+        """
         reflection_context = dict(context)
         reflection_context["name"] = f"{context.get('name', f'slide_{slide.slide_id:02d}')}_reflection"
+        
+        # 格式化反馈
         feedback_text = "\n".join(
             f"- [{item.dimension.value}] {item.issue_description} => {item.suggestion}" for item in feedback
         )
+        
+        # 获取上下文摘要（TODO 2.2）
+        context_summaries = state.sliding_summaries[-state.window_config.max_prev_slides :]
+        context_summary = self._format_context_with_summaries(context_summaries)
+        
+        # 获取证据信息（从原始幻灯片 metadata）
+        evidence_items = slide.metadata.get("evidence_refs", [])
+        evidence_block = self._format_evidence_block(evidence_items) if evidence_items else "(无原始证据)"
+        
         prompt = _REFLECTION_PROMPT_TEMPLATE.format(
             key_point=key_point.point,
             layout=slide.layout_template,
             feedback=feedback_text,
+            context_summary=context_summary,
+            evidence_block=evidence_block,
             slide_html=slide.slide_html,
         )
+        
         snapshot_manager.write_text(
             state.run_id,
             f"03_content/slide_{slide.slide_id:02d}_reflection_prompt_{slide.reflection_count + 1}",
             prompt,
         )
         logger.info("根据质量反馈重写：slide_id=%s，反馈摘要=%s", slide.slide_id, feedback_text[:160])
-        response = self.client.structured_completion(prompt, SlideResponse, system=_GENERATION_SYSTEM_PROMPT, context=reflection_context)
+        
+        response = self.client.structured_completion(
+            prompt, SlideResponse, system=_GENERATION_SYSTEM_PROMPT, context=reflection_context
+        )
         regenerated = self._convert_slide(response, slide.slide_id, key_point)
         regenerated.reflection_count = slide.reflection_count + 1
         regenerated.metadata.update(slide.metadata)
         regenerated.metadata["reflection_round"] = regenerated.reflection_count
         return regenerated
 
-    def _build_summary(self, slide: SlideContent) -> SlidingSummary:
+    def _build_summary(
+        self,
+        slide: SlideContent,
+        evidence_ids: Optional[List[str]] = None
+    ) -> SlidingSummary:
+        """从幻灯片内容生成滑窗摘要，包含证据引用。
+        
+        Args:
+            slide: 幻灯片内容对象
+            evidence_ids: 本页引用的证据块 ID 列表
+            
+        Returns:
+            结构化的滑窗摘要
+        """
+        # 提取主要信息
         headline = slide.page_title or slide.key_point or slide.section_title
-        main_message = text_tools.summarise_text(headline, 1) if headline else ""
-        key_concepts = [value for value in [slide.section_title, slide.key_point] if value][:3]
+        
+        # 生成主旨摘要（保留完整语义，不使用 summarise_text）
+        main_message = headline[:150] if headline else ""
+        
+        # 提取关键概念
+        key_concepts = []
+        if slide.section_title:
+            key_concepts.append(slide.section_title)
+        if slide.key_point and slide.key_point != slide.section_title:
+            key_concepts.append(slide.key_point)
+        # 从 speaker_notes 中提取关键词（可选）
+        if slide.speaker_notes:
+            # 简单提取前 2 个句子作为关键概念补充
+            notes_sentences = slide.speaker_notes.split("。")[:2]
+            key_concepts.extend([s.strip() for s in notes_sentences if s.strip()])
+        
+        # 最多保留 3 个关键概念
+        key_concepts = key_concepts[:3]
+        
+        # 提取证据 ID
+        supporting_evidence_ids = evidence_ids or []
+        if not supporting_evidence_ids and "evidence_ids" in slide.metadata:
+            supporting_evidence_ids = slide.metadata["evidence_ids"]
+        
+        # 生成过渡提示（基于内容类型）
+        transition_hint = ""
+        if slide.slide_type == SlideType.SECTION:
+            transition_hint = "章节开始，后续展开详细内容"
+        elif slide.slide_type == SlideType.CONTENT:
+            transition_hint = "继续论述要点"
+        elif slide.slide_type == SlideType.SUMMARY:
+            transition_hint = "总结前述内容"
+        
         return SlidingSummary(
             slide_id=slide.slide_id,
-            main_message=main_message[:120],
+            main_message=main_message,
             key_concepts=key_concepts,
             logical_link="continuation",
+            supporting_evidence_ids=supporting_evidence_ids,
+            transition_hint=transition_hint,
         )
 
     # ------------------------------------------------------------------
     # 幻灯片摘要
     # ------------------------------------------------------------------
     @staticmethod
-    @staticmethod
     def _format_context(slides: Iterable[SlideContent]) -> str:
+        """将历史幻灯片格式化为简单标题列表（向后兼容）。
+        
+        Args:
+            slides: 历史幻灯片列表
+            
+        Returns:
+            格式化的上下文字符串
+        """
         if not slides:
             return "(无)"
         parts = []
         for slide in slides:
             parts.append(f"- #{slide.slide_id} 《{slide.page_title or slide.key_point}》")
+        return "\n".join(parts)
+
+    @staticmethod
+    def _format_context_with_summaries(summaries: List[SlidingSummary]) -> str:
+        """将历史摘要格式化为结构化上下文区块。
+        
+        根据 TODO 2.2 要求，输出格式为：
+        <SlideContext>
+          - Slide #2 主旨：...（evidence: DOC_12, DOC_45）
+          - Slide #3 主旨：...（evidence: DOC_67）
+        </SlideContext>
+        
+        Args:
+            summaries: 滑窗摘要列表
+            
+        Returns:
+            结构化的上下文字符串
+        """
+        if not summaries:
+            return "(暂无历史幻灯片)"
+        
+        parts = ["<SlideContext>"]
+        for summary in summaries:
+            # 格式化证据引用
+            evidence_str = ""
+            if summary.supporting_evidence_ids:
+                evidence_refs = ", ".join(summary.supporting_evidence_ids[:3])  # 最多显示 3 个
+                evidence_str = f"（evidence: {evidence_refs}）"
+            
+            # 构建摘要行
+            concepts_str = "、".join(summary.key_concepts[:2]) if summary.key_concepts else ""
+            main_info = summary.main_message or concepts_str
+            
+            parts.append(f"  - Slide #{summary.slide_id} 主旨：{main_info}{evidence_str}")
+            
+            # 可选：添加过渡提示
+            if summary.transition_hint:
+                parts.append(f"    提示：{summary.transition_hint}")
+        
+        parts.append("</SlideContext>")
         return "\n".join(parts)
 

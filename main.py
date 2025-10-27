@@ -25,6 +25,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--use-stub", action="store_true", help="使用内置 stub，跳过真实模型调用")
     parser.add_argument("--name", help="输出文件名前缀 (默认基于标题)")
     parser.add_argument("--verbose", action="store_true", help="显示调试日志")
+    
+    # 滑动窗口配置（TODO 2.3）
+    parser.add_argument("--window-size", type=int, help="滑动窗口大小（默认 3）")
+    parser.add_argument("--max-evidence", type=int, help="每页最大证据数（默认 3）")
+    parser.add_argument("--summary-strategy", choices=["auto", "detailed", "concise"], help="摘要策略")
+    
     return parser
 
 
@@ -54,10 +60,21 @@ def main() -> None:
     if provider == "stub" and not args.use_stub:
         provider = default_provider
 
+    # 构建滑动窗口配置（TODO 2.3）
+    window_config = {}
+    if args.window_size is not None:
+        window_config["max_prev_slides"] = args.window_size
+    if args.max_evidence is not None:
+        window_config["max_evidence_per_slide"] = args.max_evidence
+    if args.summary_strategy is not None:
+        window_config["summary_strategy"] = args.summary_strategy
+    
+    window_config = window_config if window_config else None
+
     if args.text:
-        state = generate_ppt_from_text(args.text, provider, model_name, use_stub)
+        state = generate_ppt_from_text(args.text, provider, model_name, use_stub, window_config)
     else:
-        state = generate_ppt_from_file(args.file, provider, model_name, use_stub)
+        state = generate_ppt_from_file(args.file, provider, model_name, use_stub, window_config)
 
     if state.errors:
         logger.error("生成失败: %s", "; ".join(state.errors))
